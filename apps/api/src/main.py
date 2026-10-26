@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
-from .routers import ai, data, executions, health, processes, recording, ws
+from .routers import ai, data, executions, health, processes, recording, robots, users, ws
 
 
 @asynccontextmanager
@@ -33,4 +33,6 @@ app.include_router(recording.router, prefix="/api/v1")
 app.include_router(executions.router, prefix="/api/v1")
 app.include_router(data.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
+app.include_router(robots.router, prefix="/api/v1")
 app.include_router(ws.router)

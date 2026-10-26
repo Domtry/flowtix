@@ -88,6 +88,41 @@ export class ApiService {
     return this.http.get(`${this.baseUrl}/executions/${executionId}/state`);
   }
 
+  // Auth
+  login(email: string, password: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/users/login`, { email, password });
+  }
+
+  register(email: string, name: string, password: string, role = 'operator'): Observable<any> {
+    return this.http.post(`${this.baseUrl}/users/register`, { email, name, password, role });
+  }
+
+  getMe(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/users/me`);
+  }
+
+  // Robots
+  getRobots(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/robots`);
+  }
+
+  getRobotStats(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/robots/stats`);
+  }
+
+  // AI
+  aiHealth(): Observable<any> {
+    return this.http.get(`${this.baseUrl}/ai/health`);
+  }
+
+  aiModels(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/ai/models`);
+  }
+
+  aiExecute(request: any): Observable<any> {
+    return this.http.post(`${this.baseUrl}/ai/execute`, request);
+  }
+
   // WebSocket for live execution updates
   connectExecutionWs(executionId: string): WebSocket {
     return new WebSocket(`ws://localhost:8000/ws/executions/${executionId}`);

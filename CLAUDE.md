@@ -18,10 +18,11 @@ Monorepo modulaire Python (backend) + Angular (frontend).
 - `packages/execution-contracts/` — Contrats orchestrateur-robot
 - `packages/security/` — Authentification, chiffrement
 - `packages/observability/` — Logs structures, OpenTelemetry
-- `infrastructure/docker/` — Docker Compose (PostgreSQL, Redis, MinIO, Temporal)
+- `services/ai/` — IA locale (Ollama — mistral, llava)
+- `infrastructure/docker/` — Docker Compose (PostgreSQL, Redis, MinIO, Temporal, Ollama, Jaeger)
 
 ### Stack
-- Python 3.11+, FastAPI, Pydantic, SQLAlchemy 2, asyncpg
+- Python 3.11+, FastAPI, Pydantic, SQLModel, asyncpg
 - Angular 18+, TypeScript
 - PostgreSQL 16, Redis 7, MinIO, Temporal
 - Playwright, pywinauto, PaddleOCR, OpenCV, Ollama
@@ -47,4 +48,19 @@ cd apps/studio && npm install && ng serve
 # Tests
 cd apps/api && pytest
 cd packages/process-schema && pytest
+cd packages/security && pytest
+cd services/data-engine && pytest
+cd services/resource-manager && pytest
+cd services/ai && pytest
+cd agents/windows && pytest
+
+# Ollama (apres docker compose up)
+docker exec flowtix-ollama ollama pull mistral:7b
 ```
+
+### Securite
+- JWT auth (HS256) avec RBAC 4 roles : admin, developer, operator, viewer
+- Chiffrement secrets AES-256-GCM (cle via FLOWTIX_ENCRYPTION_KEY)
+- Passwords bcrypt, jamais en clair
+- Expressions sandbox (regex, pas d'eval/exec)
+- CAPTCHA/MFA : pause, jamais contournement

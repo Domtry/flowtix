@@ -1,0 +1,19 @@
+[project]
+name = "flowtix-security"
+version = "0.1.0"
+description = "FlowtTix — Authentication, authorization, encryption"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7,<3",
+    "python-jose[cryptography]>=3.3,<4",
+    "passlib[bcrypt]>=1.7,<2",
+    "cryptography>=42.0,<44",
+    "structlog>=24.1,<25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
