@@ -89,6 +89,28 @@ async def execute_step(input: ExecuteStepInput) -> ExecuteStepResult:
                 result=result_data,
             )
 
+        if step_type.startswith("ai."):
+            from services.ai.src.models import AiRequest, AiTask
+            from services.ai.src.service import AiService
+
+            svc = AiService()
+            task_name = step_type.removeprefix("ai.")
+            params = step.get("params", {})
+            req = AiRequest(
+                task=AiTask(task_name),
+                prompt=params.get("prompt", ""),
+                context=params.get("context", {}),
+                model=params.get("model"),
+                images=params.get("images"),
+            )
+            response = await svc.execute(req)
+            duration = int((time.monotonic() - start) * 1000)
+            return ExecuteStepResult(
+                success=True,
+                duration_ms=duration,
+                result={"task": task_name, "response": response.result, "model": response.model},
+            )
+
         if step_type.startswith("win."):
             from agents.windows.src.replay import WindowsReplayEngine
 
