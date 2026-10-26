@@ -89,6 +89,23 @@ async def execute_step(input: ExecuteStepInput) -> ExecuteStepResult:
                 result=result_data,
             )
 
+        if step_type.startswith("win."):
+            from agents.windows.src.replay import WindowsReplayEngine
+
+            win_engine = WindowsReplayEngine()
+            mini = {"process": {"id": "single-step", "name": "single-step", "steps": [step]}}
+            win_result = await win_engine.replay(mini, inputs=input.inputs)
+            duration = int((time.monotonic() - start) * 1000)
+            if win_result.success:
+                return ExecuteStepResult(success=True, duration_ms=duration, result={"step_type": step_type})
+            error_msg = win_result.steps[0].error if win_result.steps else "Unknown error"
+            screenshot_key = None
+            if win_result.steps and win_result.steps[0].screenshot:
+                screenshot_key = f"{input.execution_id}/{input.step_index}/{int(time.time())}.png"
+            return ExecuteStepResult(
+                success=False, error=error_msg, duration_ms=duration, screenshot_key=screenshot_key,
+            )
+
         # Import here to avoid loading Playwright in the workflow sandbox
         from agents.browser.src.replay import ReplayEngine
 
