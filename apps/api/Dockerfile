@@ -2,9 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+COPY infrastructure/docker/zscaler-ca.crt /usr/local/share/ca-certificates/zscaler-ca.crt
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev && \
+    gcc libpq-dev ca-certificates && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
 COPY packages/ ./packages/
 COPY services/ ./services/
@@ -20,7 +26,7 @@ RUN pip install --no-cache-dir \
     ./services/data_engine \
     ./services/resource_manager \
     ./services/ai \
-    greenlet
+    greenlet temporalio pandas openpyxl psutil cryptography aiosqlite
 
 ENV PYTHONPATH=/app
 
