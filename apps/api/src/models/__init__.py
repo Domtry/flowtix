@@ -1,3 +1,3 @@
-from .process import Process
+from .process import Base, Execution, ExecutionStep, Process, ProcessVersion, Robot
 
-__all__ = ["Process"]
+__all__ = ["Base", "Execution", "ExecutionStep", "Process", "ProcessVersion", "Robot"]
