@@ -1,73 +1,137 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../services/api.service';
 
 @Component({
   selector: 'app-recording',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterModule],
   template: `
-    <div class="recording-page">
-      <header>
-        <h1>Record Process</h1>
-      </header>
-
-      <div class="recording-controls" *ngIf="!sessionId">
-        <label>Target URL:</label>
-        <input [(ngModel)]="targetUrl" placeholder="https://example.com" class="url-input" />
-        <button class="btn-record" (click)="startRecording()" [disabled]="!targetUrl">
-          Start Recording
-        </button>
+    <div class="page">
+      <div class="breadcrumb">
+        <a routerLink="/processes">Processes</a>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        <a [routerLink]="['/processes', processId]">Process</a>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        <span>Recording</span>
       </div>
 
-      <div class="recording-active" *ngIf="sessionId && isRecording">
-        <div class="recording-indicator">
-          <span class="dot"></span> Recording in progress...
-        </div>
-        <p>Perform your actions in the browser window. Events are captured automatically.</p>
-        <div class="event-count">Events captured: {{ eventCount }}</div>
-        <button class="btn-stop" (click)="stopRecording()">Stop Recording</button>
-      </div>
+      <h1>Record Session</h1>
+      <p class="subtitle">Capture browser actions to automatically generate process steps.</p>
 
-      <div class="recording-done" *ngIf="sessionId && !isRecording">
-        <h2>Recording Complete</h2>
-        <p>{{ eventCount }} events captured.</p>
-        <button class="btn-primary" (click)="saveAsVersion()">Save as Version</button>
-        <button class="btn-secondary" (click)="viewEvents()">View Events</button>
-      </div>
-
-      <div class="events-preview" *ngIf="showEvents && events.length">
-        <h3>Captured Events</h3>
-        <div class="event-list">
-          <div *ngFor="let evt of events; let i = index" class="event-item">
-            <span class="event-num">{{ i + 1 }}</span>
-            <span class="event-type">{{ evt.event_type }}</span>
-            <span class="event-detail">{{ evt.target?.selector || evt.url || '' }}</span>
+      <!-- Setup Phase -->
+      <div class="setup card" *ngIf="!sessionId">
+        <div class="form-group">
+          <label>Target URL</label>
+          <div class="url-row">
+            <input [(ngModel)]="targetUrl" placeholder="https://example.com" class="url-input" (keydown.enter)="startRecording()" />
+            <button class="btn-record" (click)="startRecording()" [disabled]="!targetUrl.trim()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
+              Start Recording
+            </button>
           </div>
+        </div>
+        @if (error) {
+          <p class="error-msg">{{ error }}</p>
+        }
+      </div>
+
+      <!-- Recording Active -->
+      <div class="active-recording card" *ngIf="sessionId && isRecording">
+        <div class="recording-header">
+          <div class="rec-indicator">
+            <span class="rec-dot"></span>
+            <span class="badge recording">Recording</span>
+          </div>
+          <button class="btn-danger" (click)="stopRecording()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/></svg>
+            Stop
+          </button>
+        </div>
+        <p class="text-muted">Perform your actions in the browser window. Events are captured automatically.</p>
+        <div class="event-counter">
+          <span class="counter-value">{{ eventCount }}</span>
+          <span class="counter-label">events captured</span>
+        </div>
+        <div class="target-url mono">{{ targetUrl }}</div>
+      </div>
+
+      <!-- Recording Done -->
+      <div class="done card" *ngIf="sessionId && !isRecording">
+        <div class="done-header">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--color-green)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="16 8 10.5 14 8 11.5"/></svg>
+          <div>
+            <h2>Recording Complete</h2>
+            <p class="text-muted">{{ eventCount }} events captured from {{ targetUrl }}</p>
+          </div>
+        </div>
+        <div class="done-actions">
+          <button class="btn-primary" (click)="saveAsVersion()">Save as Version</button>
+          <button class="btn-secondary" (click)="viewEvents()">{{ showEvents ? 'Hide' : 'View' }} Events</button>
+        </div>
+      </div>
+
+      <!-- Event List -->
+      <div class="events-section card" *ngIf="showEvents && events.length">
+        <h3>Captured Events ({{ events.length }})</h3>
+        <div class="event-table">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Type</th><th>Target</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let evt of events; let i = index">
+                <td class="mono text-muted">{{ i + 1 }}</td>
+                <td><span class="badge created">{{ evt.event_type }}</span></td>
+                <td class="mono text-muted ellipsis">{{ evt.target?.selector || evt.url || '—' }}</td>
+                <td class="mono text-muted">{{ evt.value || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   `,
   styles: [`
-    .recording-page { padding: 24px; max-width: 800px; margin: 0 auto; }
-    .recording-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 24px; }
-    .url-input { flex: 1; min-width: 300px; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 14px; }
-    .btn-record { background: #dc2626; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
-    .btn-stop { background: #dc2626; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; }
-    .btn-primary { background: #4f46e5; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin-right: 8px; }
-    .btn-secondary { background: #e2e8f0; color: #1e293b; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; }
-    .recording-indicator { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: #dc2626; margin-bottom: 12px; }
-    .dot { width: 12px; height: 12px; background: #dc2626; border-radius: 50%; animation: pulse 1s infinite; }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
-    .event-count { font-size: 24px; font-weight: 700; margin: 16px 0; }
-    .events-preview { margin-top: 24px; }
-    .event-list { max-height: 400px; overflow-y: auto; }
-    .event-item { display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
-    .event-num { color: #94a3b8; min-width: 30px; }
-    .event-type { font-weight: 600; min-width: 100px; color: #4f46e5; }
-    .event-detail { color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .page { padding: 32px; max-width: 900px; }
+    .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+    .breadcrumb a { color: var(--text-accent); }
+    .breadcrumb span:last-child { color: var(--text-primary); }
+    .subtitle { color: var(--text-muted); font-size: 13px; margin: 4px 0 24px; }
+
+    .form-group label { display: block; font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: .05em; margin-bottom: 6px; }
+    .url-row { display: flex; gap: 8px; }
+    .url-input { flex: 1; }
+    .btn-record {
+      display: flex; align-items: center; gap: 6px;
+      background: #dc2626; color: white; padding: 8px 16px;
+    }
+    .btn-record:hover { background: #ef4444; }
+    .btn-record:disabled { opacity: 0.4; cursor: not-allowed; }
+    .error-msg { color: var(--color-red); font-size: 13px; margin-top: 8px; }
+
+    .active-recording { }
+    .recording-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .rec-indicator { display: flex; align-items: center; gap: 8px; }
+    .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc2626; animation: rec-pulse 1s infinite; }
+    @keyframes rec-pulse { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(220,38,38,.4); } 50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(220,38,38,0); } }
+    .event-counter { display: flex; align-items: baseline; gap: 8px; margin: 20px 0; }
+    .counter-value { font-size: 48px; font-weight: 800; color: var(--text-primary); }
+    .counter-label { font-size: 14px; color: var(--text-muted); }
+    .target-url { padding: 8px 12px; background: var(--bg-primary); border-radius: var(--radius-md); color: var(--text-muted); }
+    .text-muted { color: var(--text-muted); }
+
+    .done-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+    .done-header h2 { margin-bottom: 2px; }
+    .done-actions { display: flex; gap: 8px; }
+
+    .events-section { margin-top: 16px; }
+    .events-section h3 { margin-bottom: 12px; }
+    .event-table { max-height: 400px; overflow-y: auto; }
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+    .ellipsis { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `]
 })
 export class RecordingComponent implements OnInit, OnDestroy {
@@ -78,6 +142,7 @@ export class RecordingComponent implements OnInit, OnDestroy {
   eventCount = 0;
   events: any[] = [];
   showEvents = false;
+  error = '';
   private pollInterval: any;
 
   constructor(private api: ApiService, private route: ActivatedRoute, private router: Router) {}
@@ -91,32 +156,50 @@ export class RecordingComponent implements OnInit, OnDestroy {
   }
 
   startRecording() {
-    this.api.startRecording(this.processId, this.targetUrl).subscribe(session => {
-      this.sessionId = session.id;
-      this.isRecording = true;
-      this.pollInterval = setInterval(() => this.pollEvents(), 2000);
+    if (!this.targetUrl.trim()) return;
+    this.error = '';
+    this.api.startRecording(this.processId, this.targetUrl).subscribe({
+      next: session => {
+        this.sessionId = session.id;
+        this.isRecording = true;
+        this.pollInterval = setInterval(() => this.pollEvents(), 2000);
+      },
+      error: err => {
+        this.error = err.error?.detail || 'Failed to start recording';
+      }
     });
   }
 
   pollEvents() {
     if (!this.sessionId) return;
-    this.api.getRecordingEvents(this.sessionId).subscribe(events => {
-      this.eventCount = events.length;
+    this.api.getRecordingEvents(this.sessionId).subscribe({
+      next: events => this.eventCount = events.length,
+      error: () => {}
     });
   }
 
   stopRecording() {
     if (this.pollInterval) clearInterval(this.pollInterval);
-    this.api.stopRecording(this.sessionId).subscribe(result => {
-      this.isRecording = false;
-      this.eventCount = result.event_count;
+    this.api.stopRecording(this.sessionId).subscribe({
+      next: result => {
+        this.isRecording = false;
+        this.eventCount = result.event_count;
+      },
+      error: () => this.isRecording = false
     });
   }
 
   viewEvents() {
-    this.api.getRecordingEvents(this.sessionId).subscribe(events => {
-      this.events = events;
-      this.showEvents = true;
+    if (this.showEvents) {
+      this.showEvents = false;
+      return;
+    }
+    this.api.getRecordingEvents(this.sessionId).subscribe({
+      next: events => {
+        this.events = events;
+        this.showEvents = true;
+      },
+      error: () => {}
     });
   }
 
@@ -129,7 +212,7 @@ export class RecordingComponent implements OnInit, OnDestroy {
           name: 'Recorded session',
           steps: events.map((evt: any, i: number) => ({
             id: `step-${i + 1}`,
-            type: this._mapEventType(evt.event_type),
+            type: this.mapEventType(evt.event_type),
             label: evt.event_type + (evt.target?.selector ? ` on ${evt.target.selector}` : ''),
             target: evt.target ? { strategy: 'dom', selector: evt.target.selector || '' } : undefined,
             value: evt.value || undefined,
@@ -137,13 +220,14 @@ export class RecordingComponent implements OnInit, OnDestroy {
           })),
         },
       };
-      this.api.createVersion(this.processId, definition).subscribe(() => {
-        this.router.navigate(['/processes', this.processId, 'edit']);
+      this.api.createVersion(this.processId, definition).subscribe({
+        next: () => this.router.navigate(['/processes', this.processId, 'edit']),
+        error: () => this.error = 'Failed to save version'
       });
     });
   }
 
-  private _mapEventType(eventType: string): string {
+  private mapEventType(eventType: string): string {
     const map: Record<string, string> = {
       click: 'ui.click', dblclick: 'ui.dblclick', input: 'ui.fill', change: 'ui.select',
       keydown: 'keyboard.press', scroll: 'ui.scroll', navigate: 'browser.navigate',

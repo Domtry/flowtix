@@ -1,137 +1,312 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, RouterModule } from '@angular/router';
+import { ActivatedRoute, RouterModule, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../services/api.service';
-import { Process, ProcessVersion, ProcessStep } from '../../models/process.model';
+import { Process, ProcessVersion, ProcessStep, Execution } from '../../models/process.model';
 
 @Component({
   selector: 'app-process-editor',
   standalone: true,
   imports: [CommonModule, RouterModule, FormsModule],
   template: `
-    <div class="editor" *ngIf="process">
-      <header>
-        <div>
-          <h1>{{ process.name }}</h1>
-          <p class="subtitle">{{ process.description || 'No description' }}</p>
+    <div class="page" *ngIf="process">
+      <!-- Top Bar -->
+      <div class="top-bar">
+        <div class="breadcrumb">
+          <a routerLink="/processes">Processes</a>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          <span>{{ process.name }}</span>
         </div>
-        <div class="actions">
-          <button class="btn" [routerLink]="['/processes', process.id, 'record']">Record</button>
-          <button class="btn-primary" (click)="runExecution()" [disabled]="!selectedVersion || executionRunning">Run</button>
-          <button class="btn-warn" *ngIf="executionRunning && !executionPaused" (click)="pauseExecution()">Pause</button>
-          <button class="btn" *ngIf="executionPaused" (click)="resumeExecution()">Resume</button>
+        <div class="top-actions">
+          <a [routerLink]="['/processes', process.id, 'record']" class="btn-secondary btn-with-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
+            Record
+          </a>
+          <button class="btn-primary btn-with-icon" (click)="runExecution()" [disabled]="!selectedVersion || executionRunning">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg>
+            Run
+          </button>
+          <button class="btn-secondary" *ngIf="executionRunning && !executionPaused" (click)="pauseExecution()">Pause</button>
+          <button class="btn-secondary" *ngIf="executionPaused" (click)="resumeExecution()">Resume</button>
           <button class="btn-danger" *ngIf="executionRunning" (click)="cancelExecution()">Cancel</button>
         </div>
-      </header>
-
-      <div class="version-bar">
-        <label>Version:</label>
-        <select [(ngModel)]="selectedVersionId" (ngModelChange)="onVersionChange()">
-          <option *ngFor="let v of versions" [value]="v.id">v{{ v.version }} ({{ v.status }})</option>
-        </select>
       </div>
 
-      <div class="steps-panel" *ngIf="steps.length">
-        <h2>Steps ({{ steps.length }})</h2>
-        <div class="step-list">
-          <div *ngFor="let step of steps; let i = index" class="step-card" [class.selected]="selectedStepIndex === i" (click)="selectedStepIndex = i">
-            <span class="step-number">{{ i + 1 }}</span>
-            <div class="step-info">
-              <span class="step-type">{{ step.type }}</span>
-              <span class="step-label">{{ step.label || step.id }}</span>
-            </div>
+      <!-- Header -->
+      <div class="process-header card">
+        <div class="header-info">
+          <h1>{{ process.name }}</h1>
+          <span class="text-muted">{{ process.description || 'No description' }}</span>
+        </div>
+        <div class="header-meta">
+          <div class="meta-item">
+            <span class="meta-label">ID</span>
+            <span class="mono">{{ process.id | slice:0:8 }}...</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">Created</span>
+            <span class="mono">{{ process.created_at | date:'MMM d, yyyy HH:mm' }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">Versions</span>
+            <span>{{ versions.length }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">Executions</span>
+            <span>{{ executions.length }}</span>
           </div>
         </div>
       </div>
 
-      <div class="step-detail" *ngIf="selectedStep">
-        <h3>Step Detail</h3>
-        <div class="detail-row"><label>ID:</label> <span>{{ selectedStep.id }}</span></div>
-        <div class="detail-row"><label>Type:</label> <span>{{ selectedStep.type }}</span></div>
-        <div class="detail-row"><label>Label:</label> <input [(ngModel)]="selectedStep.label" /></div>
-        <div class="detail-row" *ngIf="selectedStep.target">
-          <label>Target:</label>
-          <code>{{ selectedStep.target.selector || selectedStep.target.text || selectedStep.target.role }}</code>
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab" [class.active]="activeTab === 'steps'" (click)="activeTab = 'steps'">Steps</button>
+        <button class="tab" [class.active]="activeTab === 'versions'" (click)="activeTab = 'versions'">Versions</button>
+        <button class="tab" [class.active]="activeTab === 'executions'" (click)="activeTab = 'executions'">Executions</button>
+      </div>
+
+      <!-- Steps Tab -->
+      <div class="tab-content" *ngIf="activeTab === 'steps'">
+        <div class="version-selector" *ngIf="versions.length">
+          <label>Version:</label>
+          <select [(ngModel)]="selectedVersionId" (ngModelChange)="onVersionChange()">
+            <option *ngFor="let v of versions" [value]="v.id">v{{ v.version }} — {{ v.status }}</option>
+          </select>
         </div>
-        <div class="detail-row" *ngIf="selectedStep.value !== undefined">
-          <label>Value:</label> <input [(ngModel)]="selectedStep.value" />
+
+        <div class="steps-layout" *ngIf="steps.length">
+          <div class="step-list">
+            <div *ngFor="let step of steps; let i = index"
+                 class="step-item"
+                 [class.selected]="selectedStepIndex === i"
+                 [class.step-running]="liveState && liveState.current_step_index === i"
+                 [class.step-done]="liveState && (liveState.completed_steps || []).includes(step.id)"
+                 [class.step-failed]="liveState && (liveState.failed_steps || []).includes(step.id)"
+                 (click)="selectedStepIndex = i">
+              <span class="step-num">{{ i + 1 }}</span>
+              <div class="step-body">
+                <span class="step-type-badge">{{ step.type }}</span>
+                <span class="step-label">{{ step.label || step.id }}</span>
+              </div>
+              <span class="step-status-dot" *ngIf="liveState">
+                <span *ngIf="liveState.current_step_index === i" class="dot-running"></span>
+                <svg *ngIf="(liveState.completed_steps || []).includes(step.id)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-green)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg *ngIf="(liveState.failed_steps || []).includes(step.id)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-red)" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </span>
+            </div>
+          </div>
+          <div class="step-detail card" *ngIf="selectedStep">
+            <h3>Step Detail</h3>
+            <div class="detail-grid">
+              <div class="detail-field">
+                <label>ID</label>
+                <span class="mono">{{ selectedStep.id }}</span>
+              </div>
+              <div class="detail-field">
+                <label>Type</label>
+                <span class="badge created">{{ selectedStep.type }}</span>
+              </div>
+              <div class="detail-field full">
+                <label>Label</label>
+                <input [(ngModel)]="selectedStep.label" />
+              </div>
+              <div class="detail-field full" *ngIf="selectedStep.target">
+                <label>Target Selector</label>
+                <code class="mono">{{ selectedStep.target.selector || selectedStep.target.text || selectedStep.target.role || '—' }}</code>
+              </div>
+              <div class="detail-field full" *ngIf="selectedStep.value !== undefined">
+                <label>Value</label>
+                <input [(ngModel)]="selectedStep.value" />
+              </div>
+              <div class="detail-field full" *ngIf="selectedStep.params">
+                <label>Parameters</label>
+                <pre class="mono">{{ selectedStep.params | json }}</pre>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="detail-row" *ngIf="selectedStep.params">
-          <label>Params:</label>
-          <pre>{{ selectedStep.params | json }}</pre>
+
+        <div class="empty-state" *ngIf="!steps.length && versions.length">
+          <p>This version has no steps.</p>
+          <a [routerLink]="['/processes', process.id, 'record']" class="btn-primary">Record a session</a>
+        </div>
+        <div class="empty-state" *ngIf="!versions.length">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          <p>No versions yet. Record your first session to create one.</p>
+          <a [routerLink]="['/processes', process.id, 'record']" class="btn-primary">Start Recording</a>
         </div>
       </div>
 
-      <div class="empty-state" *ngIf="!steps.length && versions.length">
-        <p>This version has no steps. <a [routerLink]="['/processes', process.id, 'record']">Record a session</a> to generate steps.</p>
+      <!-- Versions Tab -->
+      <div class="tab-content" *ngIf="activeTab === 'versions'">
+        <div class="card" style="padding:0; overflow:hidden;">
+          <table>
+            <thead>
+              <tr><th>Version</th><th>Status</th><th>Steps</th><th>Created</th></tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let v of versions">
+                <td class="mono">v{{ v.version }}</td>
+                <td><span class="badge" [ngClass]="v.status">{{ v.status }}</span></td>
+                <td>{{ getStepCount(v) }}</td>
+                <td class="mono text-muted">{{ v.created_at | date:'MMM d, HH:mm' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
+      <!-- Executions Tab -->
+      <div class="tab-content" *ngIf="activeTab === 'executions'">
+        <div class="card" style="padding:0; overflow:hidden;">
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Status</th><th>Started</th><th>Completed</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let e of executions">
+                <td class="mono">{{ e.id | slice:0:8 }}...</td>
+                <td><span class="badge" [ngClass]="e.status">{{ e.status }}</span></td>
+                <td class="mono text-muted">{{ e.started_at ? (e.started_at | date:'HH:mm:ss') : '—' }}</td>
+                <td class="mono text-muted">{{ e.completed_at ? (e.completed_at | date:'HH:mm:ss') : '—' }}</td>
+                <td><a [routerLink]="['/executions', e.id]" class="btn-ghost btn-sm">View</a></td>
+              </tr>
+              <tr *ngIf="!executions.length">
+                <td colspan="5" class="empty-row">No executions yet. Run a version to create one.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Execution Panel -->
       <div class="live-panel" *ngIf="liveState">
-        <h2>Live Execution</h2>
-        <div class="live-status">
-          <span class="status-badge" [class]="liveState.status">{{ liveState.status }}</span>
-          <span>Step {{ (liveState.current_step_index || 0) + 1 }} / {{ steps.length }}</span>
-          <span>Completed: {{ liveState.completed_steps?.length || 0 }}</span>
-          <span *ngIf="liveState.failed_steps?.length" class="text-danger">Failed: {{ liveState.failed_steps.length }}</span>
+        <div class="live-header">
+          <h3>Live Execution</h3>
+          <span class="badge" [ngClass]="liveState.status">{{ liveState.status }}</span>
+        </div>
+        <div class="live-progress">
+          <div class="progress-bar">
+            <div class="progress-fill" [style.width.%]="liveProgress"></div>
+          </div>
+          <span class="progress-text">{{ (liveState.completed_steps?.length || 0) }} / {{ steps.length }} steps</span>
         </div>
         <div class="live-error" *ngIf="liveState.error">{{ liveState.error }}</div>
-      </div>
-
-      <div class="empty-state" *ngIf="!versions.length">
-        <p>No versions yet. <a [routerLink]="['/processes', process.id, 'record']">Record your first session</a>.</p>
       </div>
     </div>
   `,
   styles: [`
-    .editor { padding: 24px; max-width: 1200px; margin: 0 auto; }
-    header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
-    .subtitle { color: #64748b; margin: 4px 0 0; }
-    .actions { display: flex; gap: 8px; }
-    .btn { background: #e2e8f0; color: #1e293b; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
-    .btn-primary { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
-    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-    .btn-warn { background: #f59e0b; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
-    .btn-danger { background: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
-    .live-panel { margin-top: 24px; padding: 16px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
-    .live-status { display: flex; gap: 16px; align-items: center; margin-top: 8px; }
-    .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; text-transform: uppercase; }
-    .status-badge.running { background: #dbeafe; color: #1d4ed8; }
-    .status-badge.paused { background: #fef3c7; color: #92400e; }
-    .status-badge.succeeded { background: #dcfce7; color: #166534; }
-    .status-badge.failed { background: #fee2e2; color: #991b1b; }
-    .text-danger { color: #ef4444; }
-    .live-error { margin-top: 8px; color: #ef4444; font-size: 13px; }
-    .version-bar { margin-bottom: 24px; display: flex; align-items: center; gap: 8px; }
-    .version-bar select { padding: 6px 12px; border: 1px solid #e2e8f0; border-radius: 4px; }
-    .steps-panel h2 { margin-bottom: 12px; }
+    .page { padding: 32px; max-width: 1200px; }
+
+    .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+    .breadcrumb a { color: var(--text-accent); }
+    .breadcrumb span:last-child { color: var(--text-primary); }
+    .top-actions { display: flex; gap: 8px; }
+    .btn-with-icon { display: flex; align-items: center; gap: 6px; }
+
+    .process-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+    .header-info { flex: 1; }
+    .header-info h1 { margin-bottom: 4px; }
+    .header-meta { display: flex; gap: 24px; }
+    .meta-item { text-align: right; }
+    .meta-label { display: block; font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: .05em; }
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+    .text-muted { color: var(--text-muted); }
+
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-color); margin-bottom: 20px; }
+    .tab {
+      padding: 10px 20px;
+      background: none;
+      color: var(--text-secondary);
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      font-weight: 500;
+    }
+    .tab:hover { color: var(--text-primary); }
+    .tab.active { color: var(--text-primary); border-bottom-color: var(--color-indigo); }
+
+    .version-selector { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 13px; }
+    .version-selector label { color: var(--text-muted); }
+    .version-selector select { min-width: 200px; }
+
+    .steps-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .step-list { display: flex; flex-direction: column; gap: 4px; }
-    .step-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer; }
-    .step-card.selected { border-color: #4f46e5; background: #eef2ff; }
-    .step-number { font-weight: 700; color: #4f46e5; min-width: 24px; }
-    .step-type { font-size: 11px; text-transform: uppercase; color: #64748b; }
-    .step-label { display: block; }
-    .step-detail { margin-top: 24px; padding: 16px; background: #f8fafc; border-radius: 8px; }
-    .detail-row { margin-bottom: 8px; display: flex; gap: 8px; align-items: center; }
-    .detail-row label { font-weight: 600; min-width: 80px; color: #475569; }
-    .detail-row input { padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 4px; flex: 1; }
-    .detail-row code, .detail-row pre { background: #e2e8f0; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
-    .empty-state { color: #64748b; margin-top: 32px; }
-    .empty-state a { color: #4f46e5; }
+    .step-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .step-item:hover { border-color: var(--bg-tertiary); }
+    .step-item.selected { border-color: var(--color-indigo); background: rgba(99,102,241,0.05); }
+    .step-item.step-running { border-color: var(--color-blue); background: var(--color-blue-bg); }
+    .step-item.step-done { border-left: 3px solid var(--color-green); }
+    .step-item.step-failed { border-left: 3px solid var(--color-red); }
+    .step-num { font-weight: 700; font-size: 12px; color: var(--text-muted); min-width: 20px; text-align: center; }
+    .step-body { flex: 1; min-width: 0; }
+    .step-type-badge { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-accent); background: rgba(99,102,241,0.1); padding: 1px 6px; border-radius: 3px; margin-bottom: 2px; }
+    .step-label { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .step-status-dot { display: flex; align-items: center; }
+    .dot-running { width: 8px; height: 8px; border-radius: 50%; background: var(--color-blue); animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .step-detail h3 { margin-bottom: 16px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .detail-field { display: flex; flex-direction: column; gap: 4px; }
+    .detail-field.full { grid-column: 1 / -1; }
+    .detail-field label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: .05em; }
+    .detail-field code, .detail-field pre { background: var(--bg-primary); padding: 8px 12px; border-radius: var(--radius-md); font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+
+    .empty-state {
+      padding: 64px 24px;
+      text-align: center;
+      color: var(--text-muted);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .empty-state svg { opacity: 0.3; }
+    .empty-row { text-align: center; padding: 32px 12px !important; color: var(--text-muted); }
+
+    .live-panel {
+      margin-top: 20px;
+      padding: 16px;
+      background: var(--bg-surface);
+      border: 1px solid var(--color-blue);
+      border-radius: var(--radius-lg);
+    }
+    .live-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .live-progress { display: flex; align-items: center; gap: 12px; }
+    .progress-bar { flex: 1; height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--color-indigo); border-radius: 3px; transition: width 0.3s; }
+    .progress-text { font-size: 12px; color: var(--text-muted); min-width: 80px; text-align: right; }
+    .live-error { margin-top: 8px; color: var(--color-red); font-size: 13px; padding: 8px; background: var(--color-red-bg); border-radius: var(--radius-md); }
+
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
   `]
 })
 export class ProcessEditorComponent implements OnInit, OnDestroy {
   process: Process | null = null;
   versions: ProcessVersion[] = [];
+  executions: Execution[] = [];
   selectedVersionId = '';
   selectedStepIndex = -1;
+  activeTab = 'steps';
   currentExecutionId: string | null = null;
   executionRunning = false;
   executionPaused = false;
   liveState: any = null;
   private ws: WebSocket | null = null;
 
-  constructor(private api: ApiService, private route: ActivatedRoute) {}
+  constructor(private api: ApiService, private route: ActivatedRoute, private router: Router) {}
 
   get selectedVersion(): ProcessVersion | undefined {
     return this.versions.find(v => v.id === this.selectedVersionId);
@@ -148,19 +323,38 @@ export class ProcessEditorComponent implements OnInit, OnDestroy {
     return this.selectedStepIndex >= 0 ? this.steps[this.selectedStepIndex] : undefined;
   }
 
+  get liveProgress(): number {
+    if (!this.liveState || !this.steps.length) return 0;
+    return ((this.liveState.completed_steps?.length || 0) / this.steps.length) * 100;
+  }
+
   ngOnInit() {
     const id = this.route.snapshot.paramMap.get('id')!;
-    this.api.getProcess(id).subscribe(p => this.process = p);
+    if (id === 'new') {
+      this.router.navigate(['/processes']);
+      return;
+    }
+    this.api.getProcess(id).subscribe({
+      next: p => this.process = p,
+      error: () => this.router.navigate(['/processes'])
+    });
     this.api.getVersions(id).subscribe(versions => {
       this.versions = versions;
-      if (versions.length) {
-        this.selectedVersionId = versions[0].id;
-      }
+      if (versions.length) this.selectedVersionId = versions[0].id;
+    });
+    this.api.getExecutions(id).subscribe({
+      next: e => this.executions = e,
+      error: () => this.executions = []
     });
   }
 
   onVersionChange() {
     this.selectedStepIndex = -1;
+  }
+
+  getStepCount(v: ProcessVersion): number {
+    const proc = (v.definition as any)?.process || v.definition;
+    return proc?.steps?.length || 0;
   }
 
   ngOnDestroy() {
@@ -169,28 +363,32 @@ export class ProcessEditorComponent implements OnInit, OnDestroy {
 
   runExecution() {
     if (!this.process || !this.selectedVersionId) return;
-    this.api.createExecution(this.process.id, this.selectedVersionId).subscribe(exec => {
-      this.currentExecutionId = exec.id;
-      this.api.startExecution(exec.id).subscribe(() => {
-        this.executionRunning = true;
-        this.executionPaused = false;
-        this.connectLive(exec.id);
-      });
+    this.api.createExecution(this.process.id, this.selectedVersionId).subscribe({
+      next: exec => {
+        this.currentExecutionId = exec.id;
+        this.api.startExecution(exec.id).subscribe({
+          next: () => {
+            this.executionRunning = true;
+            this.executionPaused = false;
+            this.connectLive(exec.id);
+          },
+          error: () => {
+            this.executionRunning = false;
+          }
+        });
+      },
+      error: () => {}
     });
   }
 
   pauseExecution() {
     if (!this.currentExecutionId) return;
-    this.api.pauseExecution(this.currentExecutionId).subscribe(() => {
-      this.executionPaused = true;
-    });
+    this.api.pauseExecution(this.currentExecutionId).subscribe(() => this.executionPaused = true);
   }
 
   resumeExecution() {
     if (!this.currentExecutionId) return;
-    this.api.resumeExecution(this.currentExecutionId).subscribe(() => {
-      this.executionPaused = false;
-    });
+    this.api.resumeExecution(this.currentExecutionId).subscribe(() => this.executionPaused = false);
   }
 
   cancelExecution() {
@@ -210,9 +408,12 @@ export class ProcessEditorComponent implements OnInit, OnDestroy {
       this.executionPaused = state.paused || false;
       if (['succeeded', 'failed', 'cancelled'].includes(state.status)) {
         this.executionRunning = false;
+        if (this.process) {
+          this.api.getExecutions(this.process.id).subscribe(e => this.executions = e);
+        }
       }
     };
-    this.ws.onerror = () => { this.executionRunning = false; };
-    this.ws.onclose = () => { this.ws = null; };
+    this.ws.onerror = () => this.executionRunning = false;
+    this.ws.onclose = () => this.ws = null;
   }
 }
