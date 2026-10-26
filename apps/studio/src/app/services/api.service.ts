@@ -66,4 +66,30 @@ export class ApiService {
   getRecordingEvents(sessionId: string): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/recording/${sessionId}/events`);
   }
+
+  // Execution control
+  startExecution(executionId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/executions/${executionId}/start`, {});
+  }
+
+  pauseExecution(executionId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/executions/${executionId}/pause`, {});
+  }
+
+  resumeExecution(executionId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/executions/${executionId}/resume`, {});
+  }
+
+  cancelExecution(executionId: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/executions/${executionId}/cancel`, {});
+  }
+
+  getExecutionState(executionId: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/executions/${executionId}/state`);
+  }
+
+  // WebSocket for live execution updates
+  connectExecutionWs(executionId: string): WebSocket {
+    return new WebSocket(`ws://localhost:8000/ws/executions/${executionId}`);
+  }
 }
