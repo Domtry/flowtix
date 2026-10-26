@@ -1,99 +1,92 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import Column, DateTime, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlmodel import Field, Relationship, SQLModel
 
 
-class Base(DeclarativeBase):
-    pass
-
-
-class Process(Base):
+class Process(SQLModel, table=True):
     __tablename__ = "processes"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    name: str = Field(max_length=255)
+    description: str | None = Field(default=None)
+    created_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now()),
     )
 
-    versions: Mapped[list["ProcessVersion"]] = relationship(back_populates="process")
+    versions: list["ProcessVersion"] = Relationship(back_populates="process")
 
 
-class ProcessVersion(Base):
+class ProcessVersion(SQLModel, table=True):
     __tablename__ = "process_versions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    process_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("processes.id", ondelete="CASCADE")
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    process_id: uuid.UUID = Field(foreign_key="processes.id")
+    version: int
+    schema_version: str = Field(default="1.0", max_length=10)
+    definition: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    status: str = Field(default="draft", max_length=20)
+    created_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
-    version: Mapped[int] = mapped_column(Integer, nullable=False)
-    schema_version: Mapped[str] = mapped_column(String(10), default="1.0")
-    definition: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="draft")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    process: Mapped[Process] = relationship(back_populates="versions")
+    process: Process | None = Relationship(back_populates="versions")
 
 
-class Robot(Base):
+class Robot(SQLModel, table=True):
     __tablename__ = "robots"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    machine_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    capabilities: Mapped[dict] = mapped_column(JSONB, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="offline")
-    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    registered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    name: str = Field(max_length=255)
+    machine_id: str | None = Field(default=None, max_length=255)
+    capabilities: dict = Field(default_factory=dict, sa_column=Column(JSONB, server_default="[]"))
+    status: str = Field(default="offline", max_length=20)
+    last_heartbeat: datetime | None = Field(default=None)
+    registered_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
 
-class Execution(Base):
+class Execution(SQLModel, table=True):
     __tablename__ = "executions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    process_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("processes.id")
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    process_id: uuid.UUID = Field(foreign_key="processes.id")
+    version_id: uuid.UUID = Field(foreign_key="process_versions.id")
+    robot_id: uuid.UUID | None = Field(default=None, foreign_key="robots.id")
+    status: str = Field(default="created", max_length=20)
+    current_step_id: str | None = Field(default=None, max_length=255)
+    inputs: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    outputs: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    error: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
+    created_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
-    version_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_versions.id")
-    )
-    robot_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("robots.id"), nullable=True
-    )
-    status: Mapped[str] = mapped_column(String(20), default="created")
-    current_step_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    inputs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    outputs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    steps: Mapped[list["ExecutionStep"]] = relationship(back_populates="execution")
+    steps: list["ExecutionStep"] = Relationship(back_populates="execution")
 
 
-class ExecutionStep(Base):
+class ExecutionStep(SQLModel, table=True):
     __tablename__ = "execution_steps"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    execution_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("executions.id", ondelete="CASCADE")
-    )
-    step_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
-    attempt: Mapped[int] = mapped_column(Integer, default=1)
-    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    screenshot_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    execution_id: uuid.UUID = Field(foreign_key="executions.id")
+    step_id: str = Field(max_length=255)
+    step_index: int
+    status: str = Field(default="pending", max_length=20)
+    attempt: int = Field(default=1)
+    result: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    error: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    screenshot_key: str | None = Field(default=None, max_length=512)
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
 
-    execution: Mapped[Execution] = relationship(back_populates="steps")
+    execution: Execution | None = Relationship(back_populates="steps")

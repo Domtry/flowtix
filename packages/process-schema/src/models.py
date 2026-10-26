@@ -91,6 +91,21 @@ class Step(BaseModel):
     on_error: ErrorStrategy | None = None
 
 
+class DataStepParams(BaseModel):
+    """Parameters for data.extract / data.transform / data.validate / data.load steps."""
+    source: str | None = None
+    destination: str | None = None
+    format: str | None = None
+    data: Any | None = None
+    output_variable: str | None = None
+    operations: list[dict[str, Any]] = Field(default_factory=list)
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    csv_options: dict[str, Any] | None = None
+    excel_options: dict[str, Any] | None = None
+    json_options: dict[str, Any] | None = None
+    xml_options: dict[str, Any] | None = None
+
+
 class VariableDefinition(BaseModel):
     type: str = "string"
     required: bool = False

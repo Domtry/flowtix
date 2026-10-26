@@ -75,11 +75,24 @@ async def execute_step(input: ExecuteStepInput) -> ExecuteStepResult:
     start = time.monotonic()
 
     try:
+        if step_type.startswith("data."):
+            from services.data_engine.src.engine import DataEngine
+            from services.data_engine.src.variables import VariableManager
+
+            vm = VariableManager(inputs=input.inputs)
+            data_engine = DataEngine(variables=vm)
+            result_data = data_engine.execute_step(step)
+            duration = int((time.monotonic() - start) * 1000)
+            return ExecuteStepResult(
+                success=True,
+                duration_ms=duration,
+                result=result_data,
+            )
+
         # Import here to avoid loading Playwright in the workflow sandbox
         from agents.browser.src.replay import ReplayEngine
 
         engine = ReplayEngine(headless=True)
-        # Wrap single step as a mini-scenario
         mini_scenario = {
             "process": {
                 "id": "single-step",
