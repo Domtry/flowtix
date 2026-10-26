@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Node / Angular
+node_modules/
+apps/studio/dist/
+apps/studio/.angular/
+.npm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+infrastructure/docker/postgres_data/
+infrastructure/docker/minio_data/
+
+# Test / Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Secrets
+*.pem
+*.key
+credentials.json
