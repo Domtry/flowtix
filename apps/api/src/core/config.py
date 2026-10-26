@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = {"env_prefix": "FLOWTIX_"}
 
-    database_url: str = "sqlite+aiosqlite:///./flowtix_dev.db"
+    database_url: str = "postgresql+asyncpg://flowtix:flowtix@localhost:5432/flowtix"
     redis_url: str = "redis://localhost:6379/0"
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"

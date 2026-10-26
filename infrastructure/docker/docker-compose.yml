@@ -34,13 +34,15 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
+    profiles:
+      - storage
 
   temporal:
     image: temporalio/auto-setup:latest
     ports:
       - "7233:7233"
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: flowtix
       POSTGRES_PWD: flowtix
@@ -52,7 +54,7 @@ services:
   temporal-ui:
     image: temporalio/ui:latest
     ports:
-      - "8080:8080"
+      - "8085:8080"
     environment:
       TEMPORAL_ADDRESS: temporal:7233
     depends_on:
@@ -64,13 +66,17 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    profiles:
+      - gpu
+
+  ollama-cpu:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles:
+      - cpu
 
   jaeger:
     image: jaegertracing/all-in-one:latest
@@ -79,6 +85,33 @@ services:
       - "4317:4317"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      FLOWTIX_DATABASE_URL: postgresql+asyncpg://flowtix:flowtix@postgres:5432/flowtix
+      FLOWTIX_REDIS_URL: redis://redis:6379
+      FLOWTIX_JWT_SECRET: dev-only-jwt-secret-change-me
+      FLOWTIX_ENCRYPTION_KEY: dev-only-change-in-production-32bytes!
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  studio:
+    build:
+      context: ../../apps/studio
+      dockerfile: Dockerfile
+    ports:
+      - "4200:80"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:
