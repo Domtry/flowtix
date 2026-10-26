@@ -5,7 +5,7 @@ import { Process, ProcessVersion, Execution, ExecutionStep } from '../models/pro
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
-  private baseUrl = 'http://localhost:8000/api/v1';
+  private baseUrl = '/api/v1';
 
   constructor(private http: HttpClient) {}
 
@@ -125,6 +125,7 @@ export class ApiService {
 
   // WebSocket for live execution updates
   connectExecutionWs(executionId: string): WebSocket {
-    return new WebSocket(`ws://localhost:8000/ws/executions/${executionId}`);
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return new WebSocket(`${wsProto}//${window.location.host}/ws/executions/${executionId}`);
   }
 }
