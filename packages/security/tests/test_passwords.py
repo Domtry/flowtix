@@ -17,4 +17,4 @@ def test_wrong_password():
 def test_different_hashes():
     h1 = hash_password("same")
     h2 = hash_password("same")
-    assert h1 != h2  # bcrypt salts
+    assert h1 != h2

@@ -5,11 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
+from .core.database import init_db
+from .models.process import *  # noqa: F401,F403 — register SQLModel tables
 from .routers import ai, data, executions, health, processes, recording, robots, users, ws
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await init_db()
     yield
 
 
