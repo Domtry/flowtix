@@ -79,7 +79,11 @@ export class ApiService {
   }
 
   // Recording
-  startRecording(processId: string, targetUrl: string, opts?: { browserPath?: string; actionType?: string; engine?: string; windowTitlePattern?: string; keepSession?: boolean }): Observable<any> {
+  getRecordingState(sessionId: string): Observable<any> {
+    return this.http.get(`${this.baseUrl}/recording/${sessionId}/state`);
+  }
+
+  startRecording(processId: string, targetUrl: string, opts?: { browserPath?: string; actionType?: string; engine?: string; windowTitlePattern?: string; keepSession?: boolean; startDelayS?: number }): Observable<any> {
     return this.http.post(`${this.baseUrl}/recording/start`, {
       process_id: processId,
       target_url: targetUrl,
@@ -88,6 +92,7 @@ export class ApiService {
       engine: opts?.engine || 'auto',
       window_title_pattern: opts?.windowTitlePattern || '',
       keep_session: !!opts?.keepSession,
+      start_delay_s: opts?.startDelayS || 0,
     });
   }
 
@@ -232,6 +237,14 @@ export class ApiService {
     const params: any = { process_id: processId };
     if (versionId) params.version_id = versionId;
     return this.http.get<any[]>(`${this.baseUrl}/workflow/process-steps`, { params });
+  }
+
+  stopPipeline(id: string): Observable<any> {
+    return this.http.post(`${this.baseUrl}/pipelines/${id}/stop`, {});
+  }
+
+  setPipelineSchedule(id: string, enabled: boolean): Observable<any> {
+    return this.http.post(`${this.baseUrl}/pipelines/${id}/schedule`, { enabled });
   }
 
   runPipeline(id: string): Observable<any> {

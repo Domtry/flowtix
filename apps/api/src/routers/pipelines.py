@@ -1,6 +1,7 @@
 """Workflows ("pipelines"): graphs of triggers, robots, logic and data nodes."""
 
 import base64
+import copy
 import csv
 import hashlib
 import hmac
@@ -143,6 +144,8 @@ async def _pipeline_dict(db: AsyncSession, p: Pipeline, detail: bool = False) ->
         "robot_code": p.robot_code, "robot_name": robot.name if robot else None,
         "triggers": sorted({n["type"] for n in _nodes(p) if n.get("type") in TRIGGERS}),
         "node_count": len(_nodes(p)), "next_run_at": _next_run(p),
+        "has_schedule": bool(_nodes(p, "trigger.schedule")),
+        "schedule_active": any((n.get("config") or {}).get("enabled") for n in _nodes(p, "trigger.schedule")),
         "has_api_key": bool(p.api_key_hash), "last_run": _run_dict(last) if last else None,
         "created_at": _iso(p.created_at), "updated_at": _iso(p.updated_at),
     }
@@ -416,6 +419,39 @@ async def get_run(run_id: UUID, db: AsyncSession = Depends(get_db)) -> dict:
         "error": i.error, "started_at": _iso(i.started_at), "completed_at": _iso(i.completed_at),
     } for i in items]
     return d
+
+
+class ScheduleToggle(BaseModel):
+    enabled: bool
+
+
+@router.post("/pipelines/{pipeline_id}/stop")
+async def stop_pipeline(pipeline_id: UUID, db: AsyncSession = Depends(get_db)) -> dict:
+    """Stop whatever this workflow is running or about to run (queued, scheduled…)."""
+    p = await _get_pipeline(db, pipeline_id)
+    runs = (await db.execute(select(PipelineRun).where(
+        PipelineRun.pipeline_id == p.id, PipelineRun.status.in_(("queued", "running"))))).scalars().all()
+    for run in runs:
+        await cancel_run(run.id, db)
+    return {"stopped": len(runs)}
+
+
+@router.post("/pipelines/{pipeline_id}/schedule")
+async def toggle_schedule(pipeline_id: UUID, body: ScheduleToggle, db: AsyncSession = Depends(get_db)) -> dict:
+    """Suspend or resume every planned start of the workflow without touching the rest of the graph."""
+    p = await _get_pipeline(db, pipeline_id)
+    graph = copy.deepcopy(p.graph or {})
+    changed = 0
+    for n in graph.get("nodes", []):
+        if n.get("type") == "trigger.schedule":
+            n.setdefault("config", {})["enabled"] = body.enabled
+            changed += 1
+    if not changed:
+        raise HTTPException(400, "Ce workflow n'a pas de « Début — planifié »")
+    p.graph = graph
+    await db.commit()
+    await db.refresh(p)
+    return await _pipeline_dict(db, p, detail=True)
 
 
 @router.post("/pipeline-runs/{run_id}/cancel")

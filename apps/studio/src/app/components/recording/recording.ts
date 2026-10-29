@@ -109,6 +109,13 @@ import { ApiService } from '../../services/api.service';
               </span>
             </label>
 
+            <div class="form-field delay-field">
+              <label>Délai avant l'enregistrement (secondes)</label>
+              <input type="number" min="0" max="120" [(ngModel)]="startDelay" />
+              <span class="hint">Rien ne démarre avant la fin du décompte : ni l'application, ni la capture.
+                Un double bip signale le début de l'enregistrement ; <strong>Échap</strong> l'arrête (bip grave, mode Subprocess).</span>
+            </div>
+
             <div class="form-field">
               <label>Browser Path</label>
               <input
@@ -175,11 +182,21 @@ import { ApiService } from '../../services/api.service';
 
       <!-- Recording in progress -->
       @if (state === 'recording') {
-        <div class="card recording-card">
+        @if (countdown > 0) {
+          <div class="card countdown-card">
+            <div class="countdown">{{ countdown }}</div>
+            <div class="countdown-text">
+              <strong>Préparez-vous : l'enregistrement démarre à la fin du décompte</strong>
+              <span>{{ keepSession ? 'Placez-vous sur l’application et positionnez la souris.' : 'L’application sera lancée à zéro.' }}
+                Double bip = c'est parti. <kbd>Échap</kbd> arrête l'enregistrement à tout moment.</span>
+            </div>
+          </div>
+        }
+        <div class="card recording-card" [class.waiting]="countdown > 0">
           <div class="recording-header">
             <div class="rec-indicator">
               <span class="rec-dot"></span>
-              <span>Recording...</span>
+              <span>{{ countdown > 0 ? 'En attente du décompte…' : 'Recording... (Échap pour arrêter)' }}</span>
             </div>
             <div class="rec-meta">
               <span class="badge-engine">{{ activeEngine }}</span>
@@ -253,6 +270,12 @@ import { ApiService } from '../../services/api.service';
     .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-red); animation: blink 1s infinite; }
     @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
     .rec-meta { flex: 1; text-align: right; display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+    .delay-field input { width: 120px; }
+    .countdown-card { display: flex; align-items: center; gap: 24px; border-color: var(--color-amber); margin-bottom: 16px; }
+    .countdown { font-size: 64px; font-weight: 800; color: var(--color-amber); min-width: 100px; text-align: center; font-variant-numeric: tabular-nums; }
+    .countdown-text { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--text-secondary); }
+    .countdown-text kbd { border: 1px solid var(--border-color); border-radius: 4px; padding: 0 6px; font-size: 12px; }
+    .recording-card.waiting { opacity: .6; }
     .session-box { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 16px; cursor: pointer;
       border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 13px; text-transform: none; letter-spacing: 0; }
     .session-box.on { border-color: rgba(16,185,129,.5); background: rgba(16,185,129,.08); }
@@ -317,6 +340,8 @@ export class RecordingComponent implements OnInit, OnDestroy {
   appPath = '';
   windowTitle = '';
   keepSession = false;
+  startDelay = 10;
+  countdown = 0;
   activeEngine = '';
   state: 'idle' | 'recording' | 'stopping' = 'idle';
   sessionId = '';
@@ -380,6 +405,7 @@ export class RecordingComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    document.title = 'FlowtTix Studio';
     if (this.pollTimer) clearInterval(this.pollTimer);
   }
 
@@ -395,10 +421,12 @@ export class RecordingComponent implements OnInit, OnDestroy {
         engine: this.keepSession ? 'subprocess' : this.engine,
         windowTitlePattern: this.windowTitle || (this.selectedRobot?.window_title_pattern) || '',
         keepSession: this.keepSession,
+        startDelayS: this.startDelay > 0 ? this.startDelay : 0,
       }).subscribe({
         next: (resp: any) => {
           this.sessionId = resp.id;
           this.activeEngine = resp.engine || this.engine;
+          this.countdown = this.startDelay > 0 ? Math.round(this.startDelay) : 0;
           this.state = 'recording';
           this.startPollingEvents();
           this.cdr.detectChanges();
@@ -417,6 +445,7 @@ export class RecordingComponent implements OnInit, OnDestroy {
   stopRecording() {
     if (!this.sessionId) return;
     this.state = 'stopping';
+    document.title = 'FlowtTix Studio';
     if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
     this.cdr.detectChanges();
 
@@ -435,6 +464,26 @@ export class RecordingComponent implements OnInit, OnDestroy {
   private startPollingEvents() {
     this.pollTimer = setInterval(() => {
       if (this.state !== 'recording' || !this.sessionId) return;
+      this.api.getRecordingState(this.sessionId).subscribe({
+        next: (s: any) => {
+          if (s.status === 'failed') {
+            if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+            this.state = 'idle';
+            this.countdown = 0;
+            document.title = 'FlowtTix Studio';
+            this.error = `Le lancement a échoué à la fin du décompte : ${s.error || 'erreur inconnue'}`;
+            this.cdr.detectChanges();
+            return;
+          }
+          this.countdown = s.status === 'countdown' ? Math.max(1, Math.ceil(s.remaining_s || 0)) : 0;
+          document.title = this.countdown > 0 ? `⏳ ${this.countdown} s — FlowtTix Studio` : '⏺ Enregistrement — FlowtTix Studio';
+          if (s.stop_requested && this.state === 'recording') {
+            this.stopRecording();  // Escape pressed in the application
+          }
+          this.cdr.detectChanges();
+        },
+        error: () => {}
+      });
       this.api.getRecordingEvents(this.sessionId).subscribe({
         next: (events: any[]) => {
           this.events = events;

@@ -8,17 +8,18 @@ Exposes an HTTP API for:
 import asyncio
 import logging
 import os
+import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .recorder import BrowserRecorder, RecordedEvent
 from .selenium_recorder import SeleniumRecorder
-from .subprocess_recorder import SubprocessRecorder
+from .subprocess_recorder import SubprocessRecorder, _beep
 from .replay import ReplayEngine, ReplayResult
-from .subprocess_replay import SubprocessReplayEngine
+from .subprocess_replay import SubprocessReplayEngine, request_stop
 from .transformer import transform_events
 
 BROWSER_PATH = os.environ.get(
@@ -57,6 +58,8 @@ class StartRequest(BaseModel):
     window_title_pattern: str = ""
     # record in the application already open instead of launching it
     keep_session: bool = False
+    # seconds before capture starts (time to reach the app and place the pointer)
+    start_delay_s: float = Field(default=0, ge=0, le=120)
 
 
 class ReplayRequest(BaseModel):
@@ -82,33 +85,22 @@ async def health():
     }
 
 
-@app.post("/record/start")
-async def start_recording(body: StartRequest):
-    session_id = str(uuid4())
-    effective_path = body.browser_path or BROWSER_PATH
-
-    use_engine = body.engine
+def _resolve_engine(body: StartRequest, effective_path: str) -> str:
     if body.keep_session:
         # only the desktop-hook recorder can attach to an application already running;
         # Playwright/Selenium always start their own browser
-        use_engine = "subprocess"
-    elif use_engine == "auto":
-        use_engine = "playwright" if _is_chromium_based(effective_path) else "selenium"
+        return "subprocess"
+    if body.engine == "auto":
+        return "playwright" if _is_chromium_based(effective_path) else "selenium"
+    return body.engine
 
+
+async def _launch_recorder(body: StartRequest, effective_path: str, use_engine: str):
+    """Create the recorder and start it (launching the application). Returns (recorder, engine)."""
     if body.keep_session:
         recorder = SubprocessRecorder(executable_path=effective_path, window_title_pattern=body.window_title_pattern)
-        try:
-            await recorder.start(body.target_url, keep_session=True)
-        except Exception as exc:
-            raise HTTPException(500, f"Recording start failed: {exc}")
-        _recorders[session_id] = recorder
-        _session_meta[session_id] = {
-            "process_id": body.process_id, "target_url": body.target_url, "browser_path": effective_path,
-            "action_type": body.action_type, "engine": use_engine, "status": "recording", "keep_session": True,
-        }
-        logger.info("Recording started in the open session: %s", session_id)
-        return {"session_id": session_id, "status": "recording", "engine": use_engine, "keep_session": True}
-
+        await recorder.start(body.target_url, keep_session=True)
+        return recorder, "subprocess"
     recorder: BrowserRecorder | SeleniumRecorder | SubprocessRecorder
     if use_engine == "playwright":
         recorder = BrowserRecorder(executable_path=effective_path)
@@ -116,42 +108,89 @@ async def start_recording(body: StartRequest):
         recorder = SubprocessRecorder(executable_path=effective_path, window_title_pattern=body.window_title_pattern)
     else:
         recorder = SeleniumRecorder(executable_path=effective_path)
-
     try:
         await recorder.start(body.target_url)
     except Exception as exc:
-        if use_engine == "selenium":
-            logger.warning("Selenium failed (%s), falling back to subprocess: %s", effective_path, exc)
-            use_engine = "subprocess"
-            recorder = SubprocessRecorder(executable_path=effective_path, window_title_pattern=body.window_title_pattern)
-            try:
-                await recorder.start(body.target_url)
-            except Exception as exc2:
-                raise HTTPException(500, f"Launch failed: {exc2}")
-        else:
-            raise HTTPException(500, f"Browser launch failed ({use_engine}): {exc}")
+        if use_engine != "selenium":
+            raise
+        logger.warning("Selenium failed (%s), falling back to subprocess: %s", effective_path, exc)
+        recorder = SubprocessRecorder(executable_path=effective_path, window_title_pattern=body.window_title_pattern)
+        await recorder.start(body.target_url)
+        use_engine = "subprocess"
+    return recorder, use_engine
 
-    _recorders[session_id] = recorder
-    _session_meta[session_id] = {
-        "process_id": body.process_id,
-        "target_url": body.target_url,
-        "browser_path": effective_path,
-        "action_type": body.action_type,
-        "engine": use_engine,
-        "status": "recording",
+
+@app.post("/record/start")
+async def start_recording(body: StartRequest):
+    """With start_delay_s, nothing happens before the countdown ends — not even the
+    application launch — so the user can get ready; the Studio polls /state."""
+    session_id = str(uuid4())
+    effective_path = body.browser_path or BROWSER_PATH
+    use_engine = _resolve_engine(body, effective_path)
+    delay = body.start_delay_s
+    meta: dict = {
+        "process_id": body.process_id, "target_url": body.target_url, "browser_path": effective_path,
+        "action_type": body.action_type, "engine": use_engine, "keep_session": body.keep_session,
+        "status": "countdown" if delay > 0 else "starting", "arm_at": time.time() + delay, "error": None,
     }
-    logger.info("Recording started: %s -> %s (engine=%s, action=%s)",
-                session_id, body.target_url, use_engine, body.action_type)
-    return {"session_id": session_id, "status": "recording", "engine": use_engine}
+    _session_meta[session_id] = meta
+
+    if delay <= 0:
+        try:
+            recorder, meta["engine"] = await _launch_recorder(body, effective_path, use_engine)
+        except Exception as exc:
+            _session_meta.pop(session_id, None)
+            raise HTTPException(500, f"Recording start failed ({use_engine}): {exc}")
+        _recorders[session_id] = recorder
+        meta["status"] = "recording"
+        logger.info("Recording started: %s (engine=%s)", session_id, meta["engine"])
+        return {"session_id": session_id, "status": "recording", "engine": meta["engine"]}
+
+    async def start_after_countdown() -> None:
+        await asyncio.sleep(delay)
+        meta["status"] = "starting"
+        try:
+            recorder, engine = await _launch_recorder(body, effective_path, use_engine)
+        except Exception as exc:
+            logger.exception("Recording start failed after countdown")
+            meta["status"], meta["error"] = "failed", str(exc)
+            return
+        _recorders[session_id] = recorder
+        meta["engine"], meta["status"] = engine, "recording"
+        if not isinstance(recorder, SubprocessRecorder):
+            _beep((880, 120), (880, 120))  # the desktop recorder beeps itself when armed
+        logger.info("Recording started after %.0fs countdown: %s (engine=%s)", delay, session_id, engine)
+
+    meta["task"] = asyncio.create_task(start_after_countdown())
+    logger.info("Recording %s: starts in %.0fs", session_id, delay)
+    return {"session_id": session_id, "status": "countdown", "engine": use_engine}
 
 
 @app.get("/record/{session_id}/events")
 async def get_events(session_id: str):
     recorder = _recorders.get(session_id)
     if not recorder:
+        if session_id in _session_meta:
+            return []  # still counting down
         raise HTTPException(404, "Session not found")
     events = await recorder.collect_events()
     return [_event_to_dict(e) for e in events]
+
+
+@app.get("/record/{session_id}/state")
+async def recording_state(session_id: str):
+    """Countdown and Escape status, polled by the Studio (which then stops and saves)."""
+    meta = _session_meta.get(session_id)
+    recorder = _recorders.get(session_id)
+    if not meta and not recorder:
+        raise HTTPException(404, "Session not found")
+    if not recorder:
+        return {"armed": False, "remaining_s": max(0.0, round(meta["arm_at"] - time.time(), 1)),
+                "stop_requested": False, "event_count": 0, "status": meta["status"], "error": meta.get("error")}
+    if isinstance(recorder, SubprocessRecorder):
+        return {**recorder.state(), "status": "recording", "error": None}
+    return {"armed": True, "remaining_s": 0.0, "stop_requested": False, "event_count": len(recorder._events),
+            "status": "recording", "error": None}
 
 
 @app.get("/record/{session_id}/debug")
@@ -203,7 +242,16 @@ async def test_click(session_id: str):
 async def stop_recording(session_id: str):
     recorder = _recorders.get(session_id)
     if not recorder:
-        raise HTTPException(404, "Session not found")
+        meta = _session_meta.get(session_id)
+        if not meta:
+            raise HTTPException(404, "Session not found")
+        # stopped during the countdown: nothing was launched nor captured
+        task = meta.pop("task", None)
+        if task and not task.done():
+            task.cancel()
+        meta["status"] = "stopped"
+        definition = transform_events([], process_name=meta.get("target_url", "Recorded"))
+        return {"session_id": session_id, "status": "stopped", "event_count": 0, "definition": definition}
 
     events = await recorder.stop()
     meta = _session_meta.get(session_id, {})
@@ -266,6 +314,7 @@ async def start_replay(body: ReplayRequest):
 async def cancel_replay(replay_id: str):
     task = _replay_tasks.get(replay_id)
     if task:
+        request_stop()  # interrupts a mouse path / typing already running in a thread
         task.cancel()
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=5)

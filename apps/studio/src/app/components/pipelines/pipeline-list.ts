@@ -78,13 +78,23 @@ import { RUN_STATUS_LABELS, TRIGGER_LABELS } from './pipeline-labels';
                   </td>
                   <td class="muted">{{ p.node_count }}</td>
                   <td>
-                    @if (p.next_run_at) { {{ p.next_run_at | date:'EEE dd/MM HH:mm':'UTC' }} }
-                    @else { <span class="muted">—</span> }
+                    @if (p.has_schedule) {
+                      @if (p.schedule_active && p.next_run_at) { {{ p.next_run_at | date:'EEE dd/MM HH:mm':'UTC' }} }
+                      @else if (!p.schedule_active) { <span class="muted">Planning suspendu</span> }
+                      <div>
+                        <button class="link" (click)="$event.stopPropagation(); toggleSchedule(p)">
+                          {{ p.schedule_active ? '⏸ Suspendre' : '▶ Reprendre' }}
+                        </button>
+                      </div>
+                    } @else { <span class="muted">—</span> }
                   </td>
                   <td>
                     @if (p.last_run) {
                       <span class="status" [attr.data-status]="p.last_run.status">{{ statusLabel(p.last_run.status) }}</span>
                       <div class="muted">{{ p.last_run.succeeded }}/{{ p.last_run.total_rows }} ok · {{ triggerLabel(p.last_run.trigger) }}</div>
+                      @if (['queued', 'running', 'cancelling'].includes(p.last_run.status)) {
+                        <button class="stop" (click)="$event.stopPropagation(); stop(p)" [disabled]="p.last_run.status === 'cancelling'">■ Arrêter</button>
+                      }
                     } @else { <span class="muted">Jamais lancé</span> }
                   </td>
                   <td class="actions">
@@ -129,6 +139,8 @@ import { RUN_STATUS_LABELS, TRIGGER_LABELS } from './pipeline-labels';
     tbody tr:last-child td { border-bottom: none; }
     .name { font-weight: 600; }
     .actions { width: 40px; text-align: right; }
+    .link { background: none; border: none; padding: 2px 0; color: var(--color-indigo); font-size: 12px; cursor: pointer; }
+    .stop { margin-top: 4px; background: var(--color-red-bg); color: var(--color-red); border: 1px solid var(--color-red); border-radius: 6px; font-size: 11px; padding: 2px 8px; cursor: pointer; }
     .del { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 4px; }
     .del:hover { color: var(--color-red); background: var(--color-red-bg); }
     .robot { font-family: var(--font-mono); font-size: 12px; color: #10b981; font-weight: 600; }
@@ -184,6 +196,20 @@ export class PipelineListComponent implements OnInit, OnDestroy {
     this.api.createPipeline(this.form).subscribe({
       next: p => this.router.navigate(['/pipelines', p.id]),
       error: e => { this.error = e.error?.detail || 'Erreur'; this.saving = false; this.cdr.detectChanges(); },
+    });
+  }
+
+  stop(p: any) {
+    this.api.stopPipeline(p.id).subscribe({
+      next: () => this.load(),
+      error: e => { this.error = e.error?.detail || 'Arrêt impossible'; this.cdr.detectChanges(); },
+    });
+  }
+
+  toggleSchedule(p: any) {
+    this.api.setPipelineSchedule(p.id, !p.schedule_active).subscribe({
+      next: () => this.load(),
+      error: e => { this.error = e.error?.detail || 'Modification impossible'; this.cdr.detectChanges(); },
     });
   }
 

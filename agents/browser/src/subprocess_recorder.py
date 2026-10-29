@@ -346,7 +346,6 @@ class _InputHookThread(threading.Thread):
         self._thread_id = kernel32.GetCurrentThreadId()
 
         _first_click = [True]
-        _first_key = [True]
 
         def _get_fg_window_info() -> tuple[str, tuple[int, int, int, int]]:
             """Get foreground window title and rect (left, top, w, h) via pure Win32."""
@@ -406,27 +405,21 @@ class _InputHookThread(threading.Thread):
                 pass
             return user32.CallNextHookEx(self._mouse_hook, nCode, wParam, lParam)
 
-        _kb_call_count = [0]
-
         def kb_callback(nCode: int, wParam: int, lParam: int) -> int:
-            _kb_call_count[0] += 1
             try:
-                if _kb_call_count[0] <= 5:
-                    print(f"[hooks] kb_callback #{_kb_call_count[0]} nCode={nCode} wParam=0x{wParam:04X}", flush=True)
                 if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                    is_fg = self._is_target_foreground()
-                    if _kb_call_count[0] <= 5:
-                        print(f"[hooks] kb KEYDOWN is_target_fg={is_fg}", flush=True)
-                    if is_fg:
-                        kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    if kb.vkCode == VK_ESCAPE:
+                        # Escape ends the recording; swallowed so the application
+                        # doesn't react to it (close a dialog…) and it isn't recorded
+                        self._queue.put_nowait(("escape", 0, 0, time.time()))
+                        return 1
+                    if self._is_target_foreground():
                         text, dead, mods = ("", False, {})
                         if kb.vkCode not in MODIFIER_VKS:
                             text, dead, mods = _translate_key(kb.vkCode, kb.scanCode)
                         win_title, _ = _get_fg_window_info()
                         self._queue.put_nowait(("keydown", kb.vkCode, 0, time.time(), text, dead, mods, win_title))
-                        if _first_key[0]:
-                            print(f"[hooks] first key captured: vk=0x{kb.vkCode:02X} ({_vk_to_name(kb.vkCode)})", flush=True)
-                            _first_key[0] = False
             except Exception as e:
                 print(f"[hooks] kb_callback error: {e}", flush=True)
             return user32.CallNextHookEx(self._kb_hook, nCode, wParam, lParam)
@@ -465,6 +458,22 @@ class _InputHookThread(threading.Thread):
 
 
 KEYSTROKE_GROUP_TIMEOUT = 2.0
+VK_ESCAPE = 0x1B
+
+
+def _beep(*tones: tuple[int, int]) -> None:
+    """Audible cue: the user is in the target application, not looking at the Studio."""
+    def play() -> None:
+        try:
+            import winsound
+            for freq, ms in tones:
+                winsound.Beep(freq, ms)
+                time.sleep(0.05)
+        except Exception:
+            pass
+    threading.Thread(target=play, daemon=True).start()
+
+
 PATH_MIN_STEP = 3          # px between kept trajectory points
 PATH_MAX_POINTS = 2000
 PATH_MAX_AGE = 20.0        # s: older movement is not part of reaching the next click
@@ -487,14 +496,26 @@ class SubprocessRecorder:
         self._text_buffer_window: str = ""
         self._prev_click: tuple[int, int, float] | None = None
         self._last_click_target: dict = {}
+        # countdown before capture starts, and Escape to end the recording
+        self.armed = False
+        self.stop_requested = False
+
+    def state(self) -> dict:
+        return {
+            "armed": self.armed,
+            "remaining_s": 0.0,
+            "stop_requested": self.stop_requested,
+            "event_count": len(self._events),
+        }
 
     async def start(self, url: str, keep_session: bool = False) -> None:
         """keep_session: record in the application already open (no launch, no
-        opening step), so the process continues an existing session when replayed."""
+        opening step), so the process continues an existing session when replayed.
+        (The countdown before a recording is handled by the agent, before start().)"""
         loop = asyncio.get_event_loop()
         if keep_session:
             self._running = True
-            self._start_hooks()
+            self._arm()
             print("[recorder] continuing the open session: application not launched", flush=True)
             return
 
@@ -533,7 +554,13 @@ class SubprocessRecorder:
             except Exception:
                 pass
 
+        self._arm()
+
+    def _arm(self) -> None:
         self._start_hooks()
+        self.armed = True
+        _beep((880, 120), (880, 120))  # recording starts now
+        print("[recorder] capture started (Escape stops the recording)", flush=True)
 
     def _start_hooks(self) -> None:
         if self._window_title_pattern:
@@ -611,6 +638,14 @@ class SubprocessRecorder:
             for raw in batch:
                 kind = raw[0]
                 ts = raw[3]
+
+                if self.stop_requested:
+                    continue  # Escape pressed: nothing after it belongs to the process
+                if kind == "escape":
+                    self.stop_requested = True
+                    _beep((440, 350))
+                    print("[recorder] Escape pressed: stop requested", flush=True)
+                    continue
 
                 if kind in ("click", "right_click"):
                     await self._flush_text_buffer()

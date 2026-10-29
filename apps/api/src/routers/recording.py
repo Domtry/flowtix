@@ -26,6 +26,7 @@ class StartRecordingRequest(BaseModel):
     engine: str = "auto"
     window_title_pattern: str = ""
     keep_session: bool = False
+    start_delay_s: float = 0
 
 
 @router.post("/recording/start")
@@ -43,6 +44,8 @@ async def start_recording(body: StartRecordingRequest):
             payload["window_title_pattern"] = body.window_title_pattern
         if body.keep_session:
             payload["keep_session"] = True
+        if body.start_delay_s > 0:
+            payload["start_delay_s"] = min(body.start_delay_s, 120)
         try:
             resp = await client.post(f"{AGENT_URL}/record/start", json=payload)
             resp.raise_for_status()
@@ -75,6 +78,20 @@ async def get_events(session_id: str):
     return resp.json()
 
 
+@router.get("/recording/{session_id}/state")
+async def get_state(session_id: str):
+    """Countdown remaining / Escape pressed — the Studio stops and saves on Escape."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(f"{AGENT_URL}/record/{session_id}/state")
+            resp.raise_for_status()
+        except httpx.ConnectError:
+            raise HTTPException(503, "Browser agent not reachable")
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(exc.response.status_code, exc.response.text)
+    return resp.json()
+
+
 @router.post("/recording/{session_id}/stop")
 async def stop_recording(session_id: str, db: AsyncSession = Depends(get_db)):
     session = _sessions.get(session_id)
@@ -93,6 +110,13 @@ async def stop_recording(session_id: str, db: AsyncSession = Depends(get_db)):
     data = resp.json()
     definition = data.get("definition", {})
     process_id = session["process_id"]
+
+    if not definition.get("process", definition).get("steps"):
+        # stopped during the countdown or nothing captured: an empty version would
+        # become the "latest" one used by workflows
+        _sessions[session_id]["status"] = "stopped"
+        return {"session_id": session_id, "status": "stopped", "event_count": 0,
+                "version_id": None, "version": None}
 
     from sqlalchemy import func, select
     result = await db.execute(

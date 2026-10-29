@@ -9,6 +9,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -126,6 +127,24 @@ def _resolve_inputs(text, inputs: dict):
     return _INPUT_VAR.sub(repl, text)
 
 
+# Cancelling the replay task only takes effect at its next await; the mouse moves
+# and keystrokes running in executor threads check this flag to stop at once.
+_STOP = threading.Event()
+
+
+class ReplayStopped(Exception):
+    pass
+
+
+def request_stop() -> None:
+    _STOP.set()
+
+
+def _check_stop() -> None:
+    if _STOP.is_set():
+        raise ReplayStopped("Exécution arrêtée")
+
+
 def _follow_path(origin: tuple[int, int], path: list, scale: float) -> None:
     """Replay the recorded pointer trajectory from the previous click, anchored on
     where that click was found and scaled by the DPI ratio. Moving through the same
@@ -134,6 +153,7 @@ def _follow_path(origin: tuple[int, int], path: list, scale: float) -> None:
     ox, oy = origin
     prev_t = 0
     for dx, dy, t in path[:-1]:
+        _check_stop()
         gap = max(0, t - prev_t) / 1000
         prev_t = t
         px, py = ox + round(dx * scale), oy + round(dy * scale)
@@ -285,6 +305,7 @@ def _wait_visually_stable(hwnd, timeout: float = 8.0) -> None:
     deadline = time.monotonic() + timeout
     prev = None
     while time.monotonic() < deadline:
+        _check_stop()
         r = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(r))
         w, h = r.right - r.left, r.bottom - r.top
@@ -316,6 +337,7 @@ def _type_text(text: str) -> None:
     layout = user32.GetKeyboardLayout(user32.GetWindowThreadProcessId(hwnd, None) if hwnd else 0)
 
     for ch in text:
+        _check_stop()
         res = user32.VkKeyScanExW(ch, layout)
         seq: list[INPUT] = []
         if res != -1:
@@ -362,6 +384,7 @@ class SubprocessReplayEngine:
         on_step: Any = None,
     ) -> ReplayResult:
         inputs = inputs or {}
+        _STOP.clear()  # one desktop: a single replay runs at a time
         process = definition.get("process", definition)
         steps = process.get("steps", [])
 

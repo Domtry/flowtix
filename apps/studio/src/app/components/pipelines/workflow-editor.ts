@@ -59,9 +59,21 @@ interface Pt { x: number; y: number; }
         <button class="icon-del" (click)="deleteWorkflow()" title="Supprimer ce workflow">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
         </button>
+        @if (hasSchedule()) {
+          <button class="btn-ghost sched" [class.on]="scheduleActive()" (click)="toggleSchedule()"
+                  [title]="scheduleActive() ? 'Les lancements planifiés sont actifs' : 'Les lancements planifiés sont suspendus'">
+            {{ scheduleActive() ? '⏸ Suspendre le planning' : '▶ Reprendre le planning' }}
+          </button>
+        }
         <button class="btn-secondary" (click)="save()" [disabled]="!dirty || saving">Enregistrer</button>
-        <button class="btn-primary" (click)="run()" [disabled]="dirty || !!issues.length || activeRun() || !hasManual()"
-                [title]="runTitle()">▶ Lancer</button>
+        @if (activeRun()) {
+          <button class="btn-danger" (click)="stopAll()" [disabled]="stopping" title="Arrêter l'exécution en cours (et celles en attente)">
+            ■ {{ stopping ? 'Arrêt…' : 'Arrêter' }}
+          </button>
+        } @else {
+          <button class="btn-primary" (click)="run()" [disabled]="dirty || !!issues.length || !hasManual()"
+                  [title]="runTitle()">▶ Lancer</button>
+        }
       </div>
 
       @if (error) { <div class="banner error" (click)="error = ''">{{ error }}</div> }
@@ -234,6 +246,8 @@ interface Pt { x: number; y: number; }
     .issues-pop { position: absolute; top: 30px; left: 0; z-index: 30; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-md); width: 380px; max-height: 300px; overflow: auto; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
     .issue-line { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid var(--border-color); cursor: pointer; }
     .issue-line:hover { background: var(--bg-hover); }
+    .sched { font-size: 12px; border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 10px; }
+    .sched.on { color: var(--color-amber); border-color: rgba(251,191,36,.4); }
     .icon-del { background: none; border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 6px; width: 32px; height: 32px; padding: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     .icon-del svg { flex-shrink: 0; }
     .icon-del:hover { color: var(--color-red); border-color: var(--color-red); background: var(--color-red-bg); }
@@ -426,13 +440,47 @@ export class WorkflowEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  private pollTick = 0;
+
   private poll() {
-    if (this.selectedRun && this.isActive(this.selectedRun)) {
-      this.openRun(this.selectedRun.id);
-      this.refreshRuns();
-    } else if (this.runs.some(r => this.isActive(r))) {
-      this.refreshRuns();
+    // runs started by the planning or by API appear by themselves and get followed live
+    if (++this.pollTick % 3 === 0 || this.runs.some(r => this.isActive(r))) {
+      this.api.getPipelineRuns(this.id).subscribe(runs => {
+        this.runs = runs;
+        const active = runs.find(r => this.isActive(r));
+        if (active && (!this.selectedRun || !this.isActive(this.selectedRun))) {
+          this.runsOpen = true;
+          this.openRun(active.id);
+        }
+        this.cdr.detectChanges();
+      });
     }
+    if (this.selectedRun && this.isActive(this.selectedRun)) this.openRun(this.selectedRun.id);
+  }
+
+  stopping = false;
+
+  stopAll() {
+    this.stopping = true;
+    this.api.stopPipeline(this.id).subscribe({
+      next: () => { this.stopping = false; this.refreshRuns(); if (this.selectedRun) this.openRun(this.selectedRun.id); },
+      error: e => { this.stopping = false; this.error = e.error?.detail || 'Arrêt impossible'; this.cdr.detectChanges(); },
+    });
+  }
+
+  hasSchedule() { return this.graph.nodes.some(n => n.type === 'trigger.schedule'); }
+  scheduleActive() { return this.graph.nodes.some(n => n.type === 'trigger.schedule' && n.config?.enabled); }
+
+  toggleSchedule() {
+    const enable = !this.scheduleActive();
+    this.api.setPipelineSchedule(this.id, enable).subscribe({
+      next: () => {
+        // saved server-side already: mirror it locally without marking the graph dirty
+        this.graph.nodes.filter(n => n.type === 'trigger.schedule').forEach(n => n.config.enabled = enable);
+        this.cdr.detectChanges();
+      },
+      error: e => { this.error = e.error?.detail || 'Modification impossible'; this.cdr.detectChanges(); },
+    });
   }
 
   openRun(runId: string) {
