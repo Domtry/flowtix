@@ -98,6 +98,7 @@ services:
       FLOWTIX_JWT_SECRET: dev-only-jwt-secret-change-me
       FLOWTIX_ENCRYPTION_KEY: dev-only-change-in-production-32bytes!
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      FLOWTIX_BROWSER_AGENT_URL: http://host.docker.internal:9090
     depends_on:
       postgres:
         condition: service_healthy

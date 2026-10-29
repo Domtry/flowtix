@@ -2,6 +2,7 @@ export interface Process {
   id: string;
   name: string;
   description: string | null;
+  robot_code: string | null;
   created_at: string;
   updated_at: string;
 }

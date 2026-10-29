@@ -10,6 +10,13 @@ from pydantic import BaseModel
 class ProcessCreate(BaseModel):
     name: str
     description: str | None = None
+    robot_code: str | None = None
+
+
+class ProcessUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    robot_code: str | None = None
 
 
 class ProcessRead(BaseModel):
@@ -18,6 +25,7 @@ class ProcessRead(BaseModel):
     id: UUID
     name: str
     description: str | None
+    robot_code: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -26,6 +34,11 @@ class ProcessRead(BaseModel):
 
 class VersionCreate(BaseModel):
     definition: dict[str, Any]
+
+
+class VersionUpdate(BaseModel):
+    definition: dict[str, Any] | None = None
+    status: str | None = None
 
 
 class VersionRead(BaseModel):
@@ -92,3 +105,48 @@ class RobotRead(BaseModel):
     status: str
     last_heartbeat: datetime | None
     registered_at: datetime
+
+
+# --- Settings ---
+
+class SettingsRead(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    key: str
+    value: str
+
+
+class SettingsUpdate(BaseModel):
+    value: str
+
+
+# --- User ---
+
+class UserCreate(BaseModel):
+    email: str
+    name: str
+    password: str
+    role: str = "operator"
+
+
+class UserRead(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    email: str
+    name: str
+    role: str
+    created_at: datetime
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserRead

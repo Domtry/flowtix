@@ -12,6 +12,7 @@ class Process(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     name: str = Field(max_length=255)
     description: str | None = Field(default=None)
+    robot_code: str | None = Field(default=None, max_length=100)
     created_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
@@ -90,3 +91,46 @@ class ExecutionStep(SQLModel, table=True):
     completed_at: datetime | None = Field(default=None)
 
     execution: Execution | None = Relationship(back_populates="steps")
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    email: str = Field(max_length=255, unique=True, index=True)
+    name: str = Field(max_length=255)
+    password_hash: str = Field(max_length=255)
+    role: str = Field(default="operator", max_length=20)
+    created_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+
+
+class Setting(SQLModel, table=True):
+    __tablename__ = "settings"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    key: str = Field(max_length=255, unique=True, index=True)
+    value: str = Field(default="")
+
+
+class AppModule(SQLModel, table=True):
+    __tablename__ = "app_modules"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    code: str = Field(max_length=100, unique=True, index=True)
+    name: str = Field(max_length=255)
+    description: str | None = Field(default=None)
+    action_type: str = Field(default="web", max_length=20)
+    engine: str = Field(default="auto", max_length=20)
+    executable_path: str = Field(default="", max_length=1024)
+    default_url: str | None = Field(default=None, max_length=1024)
+    window_title_pattern: str | None = Field(default=None, max_length=255)
+    config: dict = Field(default_factory=dict, sa_column=Column(JSONB, server_default="{}"))
+    created_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now()),
+    )

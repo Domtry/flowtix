@@ -44,3 +44,7 @@ htmlcov/
 *.pem
 *.key
 credentials.json
+
+# Local databases (dev SQLite fallback)
+*.db
+*.sqlite3

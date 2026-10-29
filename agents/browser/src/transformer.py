@@ -50,27 +50,46 @@ def transform_events(events: list[RecordedEvent], process_name: str = "Recorded 
                 target = _build_target(event.target)
                 step_type = "ui.click" if event.event_type == EventType.CLICK else "ui.dblclick"
                 label_text = event.target.get("text", "")[:50] or event.target.get("selector", "")
-                steps.append({
+                step_data: dict = {
                     "id": _step_id(),
                     "type": step_type,
                     "label": f"Click '{label_text}'",
                     "target": target,
-                })
+                }
+                if event.metadata:
+                    step_data["metadata"] = event.metadata
+                steps.append(step_data)
 
             case EventType.INPUT:
-                key = _target_key(event.target)
-                if input_buffer and input_buffer["target_key"] == key:
-                    input_buffer["value"] = event.value or ""
-                    input_buffer["timestamp"] = event.timestamp
-                else:
+                meta = event.metadata or {}
+                if meta.get("grouped"):
                     if input_buffer:
                         steps.append(_make_fill_step(input_buffer))
-                    input_buffer = {
-                        "target_key": key,
-                        "target": event.target,
+                        input_buffer = None
+                    target = _build_target(event.target) if event.target else {"strategy": "dom"}
+                    name = event.target.get("text", "") or event.target.get("name", "") or event.target.get("selector", "") if event.target else ""
+                    steps.append({
+                        "id": _step_id(),
+                        "type": "ui.fill",
+                        "label": f"Type '{(event.value or '')[:30]}'",
+                        "target": target,
                         "value": event.value or "",
-                        "timestamp": event.timestamp,
-                    }
+                        "metadata": event.metadata,
+                    })
+                else:
+                    key = _target_key(event.target)
+                    if input_buffer and input_buffer["target_key"] == key:
+                        input_buffer["value"] = event.value or ""
+                        input_buffer["timestamp"] = event.timestamp
+                    else:
+                        if input_buffer:
+                            steps.append(_make_fill_step(input_buffer))
+                        input_buffer = {
+                            "target_key": key,
+                            "target": event.target,
+                            "value": event.value or "",
+                            "timestamp": event.timestamp,
+                        }
 
             case EventType.CHANGE:
                 target = _build_target(event.target)
@@ -100,6 +119,7 @@ def transform_events(events: list[RecordedEvent], process_name: str = "Recorded 
                     "type": "keyboard.press",
                     "label": f"Press {combo}",
                     "params": {"key": combo},
+                    "metadata": {"window_title": meta.get("window_title", "")},
                 })
 
             case EventType.SCROLL:
@@ -157,12 +177,21 @@ def _build_target(target: dict) -> dict:
     role = target.get("role", "")
     if role:
         result["role"] = role
-    name = target.get("ariaLabel", "") or target.get("name", "")
+    aria_label = target.get("ariaLabel", "")
+    if aria_label:
+        result["ariaLabel"] = aria_label
+    name = aria_label or target.get("name", "")
     if name:
         result["name"] = name
     text = target.get("text", "")
     if text:
         result["text"] = text[:100]
+    tag = target.get("tag", "")
+    if tag:
+        result["tag"] = tag
+    placeholder = target.get("placeholder", "")
+    if placeholder:
+        result["placeholder"] = placeholder
     rect = target.get("rect")
     if rect:
         result["coordinates"] = rect

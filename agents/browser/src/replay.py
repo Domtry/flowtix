@@ -1,9 +1,11 @@
 """Playwright-based replay engine.
 
 Takes a process definition (schema v1.0) and replays each step in a browser.
-Produces step-by-step results with screenshots on failure.
+Uses a multi-strategy locator with fallback chain:
+  CSS selector → aria-label → role+name → text content → coordinates.
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,9 +30,23 @@ class ReplayResult:
 
 
 class ReplayEngine:
-    def __init__(self, headless: bool = True, slow_mo: int = 0) -> None:
+    def __init__(self, headless: bool = True, slow_mo: int = 0, executable_path: str = "") -> None:
         self._headless = headless
         self._slow_mo = slow_mo
+        self._executable_path = executable_path
+
+    @staticmethod
+    def _detect_browser_type(path: str) -> tuple[str, str]:
+        import os
+        pw_firefox = os.path.expanduser(
+            r"~\AppData\Local\ms-playwright\firefox-1555\firefox\firefox.exe"
+        )
+        lower = path.lower()
+        if "firefox" in lower:
+            return "firefox", pw_firefox
+        if "webkit" in lower or "safari" in lower:
+            return "webkit", ""
+        return "chromium", path
 
     async def replay(
         self,
@@ -43,7 +59,12 @@ class ReplayEngine:
         steps = process.get("steps", [])
 
         pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=self._headless, slow_mo=self._slow_mo)
+        engine_name, effective_path = self._detect_browser_type(self._executable_path)
+        launch_opts: dict[str, Any] = {"headless": self._headless, "slow_mo": self._slow_mo}
+        if effective_path:
+            launch_opts["executable_path"] = effective_path
+        engine = getattr(pw, engine_name)
+        browser = await engine.launch(**launch_opts)
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -60,7 +81,11 @@ class ReplayEngine:
                 result = StepResult(step_id=step_id, success=True, duration_ms=duration)
             except Exception as exc:
                 duration = int((time.monotonic() - start) * 1000)
-                screenshot = await page.screenshot(full_page=False)
+                screenshot = None
+                try:
+                    screenshot = await page.screenshot(full_page=False)
+                except Exception:
+                    pass
                 result = StepResult(
                     step_id=step_id,
                     success=False,
@@ -73,6 +98,9 @@ class ReplayEngine:
                 on_error = step.get("on_error", {})
                 action = on_error.get("action", "fail") if on_error else "fail"
                 if action == "skip":
+                    results.append(result)
+                    if on_step:
+                        await on_step(result)
                     continue
                 elif action == "fail":
                     results.append(result)
@@ -97,7 +125,6 @@ class ReplayEngine:
         value = step.get("value")
         timeout = step.get("timeout_ms", 30000) or 30000
 
-        # Resolve variable references
         value = self._resolve_vars(value, inputs) if isinstance(value, str) else value
         for k, v in params.items():
             if isinstance(v, str):
@@ -116,20 +143,24 @@ class ReplayEngine:
                     await page.wait_for_load_state("domcontentloaded", timeout=timeout)
 
             case "ui.click":
-                locator = self._get_locator(page, target)
-                await locator.click(timeout=timeout)
+                locator = await self._resolve_locator(page, target, timeout)
+                if locator:
+                    await locator.click(timeout=timeout)
 
             case "ui.dblclick":
-                locator = self._get_locator(page, target)
-                await locator.dblclick(timeout=timeout)
+                locator = await self._resolve_locator(page, target, timeout)
+                if locator:
+                    await locator.dblclick(timeout=timeout)
 
             case "ui.fill":
-                locator = self._get_locator(page, target)
-                await locator.fill(value or "", timeout=timeout)
+                locator = await self._resolve_locator(page, target, timeout)
+                if locator:
+                    await locator.fill(value or "", timeout=timeout)
 
             case "ui.select":
-                locator = self._get_locator(page, target)
-                await locator.select_option(value=value, timeout=timeout)
+                locator = await self._resolve_locator(page, target, timeout)
+                if locator:
+                    await locator.select_option(value=value, timeout=timeout)
 
             case "ui.scroll":
                 x = params.get("x", 0)
@@ -149,31 +180,82 @@ class ReplayEngine:
             case _:
                 raise ValueError(f"Unknown step type: {step_type}")
 
-    def _get_locator(self, page: Page, target: dict) -> Any:
-        strategy = target.get("strategy", "dom")
+    async def _resolve_locator(self, page: Page, target: dict, timeout: int) -> Any:
+        """Multi-strategy locator with fallback chain."""
+        selector = target.get("selector", "")
+        text = target.get("text", "")
+        role = target.get("role", "")
+        name = target.get("name", "") or target.get("ariaLabel", "")
+        aria_label = target.get("ariaLabel", "")
+        coordinates = target.get("coordinates")
+        tag = target.get("tag", "")
+        probe_timeout = min(timeout, 3000)
 
-        match strategy:
-            case "dom":
-                selector = target.get("selector", "")
-                if selector:
-                    return page.locator(selector).first
-            case "accessibility":
-                role = target.get("role", "")
-                name = target.get("name", "")
-                if role:
-                    return page.get_by_role(role, name=name or None)
-            case "ocr" | "image":
-                text = target.get("text", "")
-                if text:
-                    return page.get_by_text(text).first
+        # Strategy 1: CSS selector
+        if selector:
+            loc = page.locator(selector).first
+            try:
+                await loc.wait_for(state="attached", timeout=probe_timeout)
+                return loc
+            except Exception:
+                pass
 
-        # Fallback chain
-        if target.get("text"):
-            return page.get_by_text(target["text"]).first
-        if target.get("role"):
-            return page.get_by_role(target["role"], name=target.get("name") or None)
-        if target.get("selector"):
-            return page.locator(target["selector"]).first
+        # Strategy 2: aria-label
+        if aria_label:
+            loc = page.locator(f'[aria-label="{aria_label}"]').first
+            try:
+                await loc.wait_for(state="attached", timeout=probe_timeout)
+                return loc
+            except Exception:
+                pass
+
+        # Strategy 3: role + accessible name
+        if role:
+            loc = page.get_by_role(role, name=name or None).first
+            try:
+                await loc.wait_for(state="attached", timeout=probe_timeout)
+                return loc
+            except Exception:
+                pass
+
+        # Strategy 4: placeholder (for inputs)
+        placeholder = target.get("placeholder", "")
+        if placeholder:
+            loc = page.get_by_placeholder(placeholder).first
+            try:
+                await loc.wait_for(state="attached", timeout=probe_timeout)
+                return loc
+            except Exception:
+                pass
+
+        # Strategy 5: text content (short texts only)
+        if text and len(text) < 80:
+            loc = page.get_by_text(text, exact=False).first
+            try:
+                await loc.wait_for(state="attached", timeout=probe_timeout)
+                return loc
+            except Exception:
+                pass
+
+        # Strategy 6: tag + text for links/buttons
+        if tag in ("a", "button") and text:
+            loc = page.locator(f"{tag}:has-text('{text[:50]}')").first
+            try:
+                await loc.wait_for(state="attached", timeout=probe_timeout)
+                return loc
+            except Exception:
+                pass
+
+        # Strategy 7: coordinates as last resort
+        if coordinates and coordinates.get("w") and coordinates.get("h"):
+            x = coordinates["x"] + coordinates["w"] // 2
+            y = coordinates["y"] + coordinates["h"] // 2
+            await page.mouse.click(x, y)
+            return None  # Already clicked
+
+        # Final fallback: try selector without wait
+        if selector:
+            return page.locator(selector).first
 
         raise ValueError(f"Cannot locate element: {target}")
 
@@ -192,25 +274,26 @@ class ReplayEngine:
             match cond_type:
                 case "text_contains":
                     if target:
-                        loc = self._get_locator(page, target)
+                        loc = (await self._resolve_locator(page, target, timeout)) or page.locator("body")
                         await expect(loc).to_contain_text(str(expected), timeout=timeout)
                     else:
                         await expect(page.locator("body")).to_contain_text(str(expected), timeout=timeout)
                 case "text_equals":
-                    loc = self._get_locator(page, target) if target else page.locator("body")
-                    await expect(loc).to_have_text(str(expected), timeout=timeout)
+                    loc = (await self._resolve_locator(page, target, timeout)) if target else page.locator("body")
+                    if loc:
+                        await expect(loc).to_have_text(str(expected), timeout=timeout)
                 case "element_visible":
-                    loc = self._get_locator(page, target) if target else page.locator(str(expected))
-                    await expect(loc).to_be_visible(timeout=timeout)
+                    loc = (await self._resolve_locator(page, target, timeout)) if target else page.locator(str(expected))
+                    if loc:
+                        await expect(loc).to_be_visible(timeout=timeout)
                 case "url_matches":
                     await expect(page).to_have_url(str(expected), timeout=timeout)
 
     @staticmethod
     def _resolve_vars(text: str, inputs: dict) -> str:
-        import re
         def replacer(m: re.Match) -> str:
             var_path = m.group(1)
-            parts = var_path.split(".")
+            parts = var_path.split(".", 1)  # column names may themselves contain dots
             if parts[0] == "inputs" and len(parts) > 1:
                 return str(inputs.get(parts[1], m.group(0)))
             return m.group(0)

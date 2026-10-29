@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY infrastructure/docker/zscaler-ca.crt /usr/local/share/ca-certificates/zscaler-ca.crt
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev ca-certificates && \
+    gcc libpq-dev ca-certificates curl && \
     update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir \
     ./services/data_engine \
     ./services/resource_manager \
     ./services/ai \
-    greenlet temporalio pandas openpyxl psutil cryptography aiosqlite
+    greenlet temporalio pandas openpyxl psutil cryptography aiosqlite httpx
 
 ENV PYTHONPATH=/app
 

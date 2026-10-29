@@ -54,6 +54,10 @@ cd services/resource-manager && pytest
 cd services/ai && pytest
 cd agents/windows && pytest
 
+# Browser Agent (sur le host, pas dans Docker)
+cd agents/browser && pip install -e . && python run.py
+# run.py installe automatiquement chromium + firefox via playwright
+
 # Ollama (apres docker compose up)
 docker exec flowtix-ollama ollama pull mistral:7b
 ```

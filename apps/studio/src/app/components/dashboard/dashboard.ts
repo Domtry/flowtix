@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { ApiService } from '../../services/api.service';
@@ -148,12 +148,12 @@ export class DashboardComponent implements OnInit {
     return this.processes.filter(p => new Date(p.updated_at).getTime() > week).length;
   }
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
 
   ngOnInit() {
     this.api.getProcesses().subscribe({
-      next: p => this.processes = p,
-      error: () => this.processes = []
+      next: p => { this.processes = p; this.cdr.detectChanges(); },
+      error: () => { this.processes = []; this.cdr.detectChanges(); }
     });
   }
 }

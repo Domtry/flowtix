@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
-from ..models.process import Execution, ProcessVersion
+from ..models.process import Execution, ExecutionStep, Process, ProcessVersion
 from ..schemas.process import ExecutionRead
 from ..services.execution_service import ExecutionService
 
@@ -24,48 +24,71 @@ async def start_execution(
     if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     if execution.status != "created":
-        raise HTTPException(status_code=400, detail=f"Execution is {execution.status}, expected created")
+        raise HTTPException(
+            status_code=400, detail=f"Execution is {execution.status}, expected created"
+        )
 
     version = await db.get(ProcessVersion, execution.version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    workflow_id = await _execution_service.start_execution(
+    process = await db.get(Process, execution.process_id)
+    robot_code = process.robot_code if process else None
+
+    await _execution_service.start_execution(
         execution_id=str(execution.id),
-        process_id=str(execution.process_id),
-        version_id=str(execution.version_id),
         definition=version.definition,
-        inputs=execution.inputs or {},
+        robot_code=robot_code,
+        inputs=execution.inputs,
     )
 
-    execution.status = "queued"
-    await db.commit()
-
-    return {"workflow_id": workflow_id, "status": "queued"}
+    return {"status": "running"}
 
 
 @router.post("/executions/{execution_id}/pause")
 async def pause_execution(execution_id: UUID) -> dict:
     await _execution_service.pause_execution(str(execution_id))
-    return {"status": "pause_signal_sent"}
+    return {"status": "paused"}
 
 
 @router.post("/executions/{execution_id}/resume")
 async def resume_execution(execution_id: UUID) -> dict:
     await _execution_service.resume_execution(str(execution_id))
-    return {"status": "resume_signal_sent"}
+    return {"status": "running"}
 
 
 @router.post("/executions/{execution_id}/cancel")
 async def cancel_execution(execution_id: UUID) -> dict:
     await _execution_service.cancel_execution(str(execution_id))
-    return {"status": "cancel_signal_sent"}
+    return {"status": "cancelled"}
 
 
 @router.get("/executions/{execution_id}/state")
-async def get_execution_state(execution_id: UUID) -> dict:
-    try:
-        state = await _execution_service.get_execution_state(str(execution_id))
-        return state
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"Could not query workflow: {exc}")
+async def get_execution_state(
+    execution_id: UUID, db: AsyncSession = Depends(get_db)
+) -> dict:
+    execution = await db.get(Execution, execution_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    result = await db.execute(
+        select(ExecutionStep)
+        .where(ExecutionStep.execution_id == execution_id)
+        .order_by(ExecutionStep.step_index)
+    )
+    steps = list(result.scalars().all())
+
+    running_step = next((s for s in steps if s.status == "running"), None)
+
+    return {
+        "execution_id": str(execution.id),
+        "status": execution.status,
+        "paused": execution.status == "paused",
+        "current_step_id": execution.current_step_id,
+        "current_step_index": running_step.step_index if running_step else None,
+        "completed_steps": [s.step_id for s in steps if s.status == "succeeded"],
+        "failed_steps": [s.step_id for s in steps if s.status == "failed"],
+        "total_steps": len(steps),
+        "started_at": execution.started_at.isoformat() if execution.started_at else None,
+        "completed_at": execution.completed_at.isoformat() if execution.completed_at else None,
+        "error": execution.error,
+    }

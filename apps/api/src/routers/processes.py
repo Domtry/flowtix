@@ -1,10 +1,11 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
+from ..models.pipeline import Pipeline, PipelineRunItem
 from ..models.process import Execution, ExecutionStep, Process, ProcessVersion
 from ..schemas.process import (
     ExecutionCreate,
@@ -12,8 +13,10 @@ from ..schemas.process import (
     ExecutionStepRead,
     ProcessCreate,
     ProcessRead,
+    ProcessUpdate,
     VersionCreate,
     VersionRead,
+    VersionUpdate,
 )
 
 router = APIRouter(tags=["processes"])
@@ -23,7 +26,7 @@ router = APIRouter(tags=["processes"])
 
 @router.post("/processes", response_model=ProcessRead, status_code=status.HTTP_201_CREATED)
 async def create_process(body: ProcessCreate, db: AsyncSession = Depends(get_db)) -> Process:
-    process = Process(name=body.name, description=body.description)
+    process = Process(name=body.name, description=body.description, robot_code=body.robot_code)
     db.add(process)
     await db.commit()
     await db.refresh(process)
@@ -42,6 +45,69 @@ async def get_process(process_id: UUID, db: AsyncSession = Depends(get_db)) -> P
     if not process:
         raise HTTPException(status_code=404, detail="Process not found")
     return process
+
+
+@router.put("/processes/{process_id}", response_model=ProcessRead)
+async def update_process(
+    process_id: UUID, body: ProcessUpdate, db: AsyncSession = Depends(get_db)
+) -> Process:
+    process = await db.get(Process, process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="Process not found")
+    if body.name is not None:
+        process.name = body.name
+    if body.description is not None:
+        process.description = body.description
+    if body.robot_code is not None:
+        process.robot_code = body.robot_code
+    db.add(process)
+    await db.commit()
+    await db.refresh(process)
+    return process
+
+
+async def _workflows_using(db: AsyncSession, process_id: UUID | None = None,
+                           version_id: UUID | None = None) -> list[str]:
+    """Workflows whose process nodes run this process (or are pinned to this version)."""
+    names = []
+    for p in (await db.execute(select(Pipeline))).scalars().all():
+        for n in (p.graph or {}).get("nodes", []):
+            cfg = n.get("config") or {}
+            if n.get("type") != "robot.run":
+                continue
+            if (process_id and cfg.get("process_id") == str(process_id)) or \
+                    (version_id and cfg.get("version_id") == str(version_id)):
+                names.append(p.name)
+                break
+    return names
+
+
+async def _delete_executions(db: AsyncSession, condition) -> None:
+    """Executions go with their process/version; workflow run history keeps its rows
+    (status, error, data) but loses the link to the deleted execution."""
+    ids = select(Execution.id).where(condition)
+    await db.execute(update(PipelineRunItem).where(PipelineRunItem.execution_id.in_(ids)).values(execution_id=None))
+    await db.execute(delete(ExecutionStep).where(ExecutionStep.execution_id.in_(ids)))
+    await db.execute(delete(Execution).where(condition))
+
+
+@router.delete("/processes/{process_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_process(process_id: UUID, db: AsyncSession = Depends(get_db)):
+    process = await db.get(Process, process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="Process not found")
+    used_by = await _workflows_using(db, process_id=process_id)
+    if used_by:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Processus utilisé par le(s) workflow(s) : {', '.join(used_by)}. "
+                   f"Retirez-le de ces workflows avant de le supprimer.",
+        )
+    await db.execute(update(Pipeline).where(Pipeline.process_id == process_id).values(process_id=None, version_id=None))
+    await _delete_executions(db, Execution.process_id == process_id)
+    await db.execute(delete(ProcessVersion).where(ProcessVersion.process_id == process_id))
+    await db.delete(process)
+    await db.commit()
 
 
 # --- Versions ---
@@ -96,6 +162,48 @@ async def get_version(
     if not version or version.process_id != process_id:
         raise HTTPException(status_code=404, detail="Version not found")
     return version
+
+
+@router.put("/processes/{process_id}/versions/{version_id}", response_model=VersionRead)
+async def update_version(
+    process_id: UUID,
+    version_id: UUID,
+    body: VersionUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> ProcessVersion:
+    version = await db.get(ProcessVersion, version_id)
+    if not version or version.process_id != process_id:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if body.definition is not None:
+        version.definition = body.definition
+    if body.status is not None:
+        version.status = body.status
+    db.add(version)
+    await db.commit()
+    await db.refresh(version)
+    return version
+
+
+@router.delete(
+    "/processes/{process_id}/versions/{version_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_version(
+    process_id: UUID, version_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    version = await db.get(ProcessVersion, version_id)
+    if not version or version.process_id != process_id:
+        raise HTTPException(status_code=404, detail="Version not found")
+    pinned_by = await _workflows_using(db, version_id=version_id)
+    if pinned_by:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version fixée dans le(s) workflow(s) : {', '.join(pinned_by)}",
+        )
+    await db.execute(update(Pipeline).where(Pipeline.version_id == version_id).values(version_id=None))
+    await _delete_executions(db, Execution.version_id == version_id)
+    await db.delete(version)
+    await db.commit()
 
 
 # --- Executions ---
